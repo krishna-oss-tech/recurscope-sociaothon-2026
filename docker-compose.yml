@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: recurscope
+      POSTGRES_USER: recurscope
+      POSTGRES_PASSWORD: change-this-local-demo-password
+    ports:
+      - "5432:5432"
+    volumes:
+      - recurscope_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recurscope -d recurscope"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://recurscope:change-this-local-demo-password@db:5432/recurscope
+      SECRET_KEY: change-this-to-a-long-random-secret-before-deployment
+      CORS_ORIGINS: http://localhost:5188,http://127.0.0.1:5188,http://localhost:8080
+      EVIDENCE_DIR: /app/storage/evidence
+      MAX_UPLOAD_MB: 5
+      HOTSPOT_RADIUS_METERS: 100
+    ports:
+      - "8018:8000"
+    volumes:
+      - recurscope_evidence:/app/storage/evidence
+    depends_on:
+      db:
+        condition: service_healthy
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8018
+    ports:
+      - "5188:80"
+    depends_on:
+      - api
+volumes:
+  recurscope_db:
+  recurscope_evidence:

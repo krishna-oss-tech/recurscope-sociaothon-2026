@@ -1,0 +1,4 @@
+@echo off
+setlocal
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue'; foreach($p in 5173,8000,5188,8018){$c=Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if($c){foreach($x in $c){$proc=Get-Process -Id $x.OwningProcess -ErrorAction SilentlyContinue; Write-Host ('PORT '+$p+' -> PID '+$x.OwningProcess+' '+$proc.ProcessName)}}else{Write-Host ('PORT '+$p+' -> free')}}; try{$h=Invoke-RestMethod http://127.0.0.1:8018/health -TimeoutSec 2; Write-Host ('RECURSCOPE API: '+$h.service+' v'+$h.version)}catch{Write-Host 'RECURSCOPE API at 8018: not responding'}; try{$r=Invoke-WebRequest http://localhost:5188 -UseBasicParsing -TimeoutSec 2; if($r.Content -match 'RecurScope'){Write-Host 'RECURSCOPE WEB at 5188: responding'}else{Write-Host 'Port 5188 responds, but RecurScope title is not present'}}catch{Write-Host 'RECURSCOPE WEB at 5188: not responding'}; Read-Host 'Press Enter to close'"
+endlocal
