@@ -77,11 +77,27 @@ export default function App(){
     setSelectedId(id)
     try{setPassport(await api.passport(id))}catch(err){notify(err instanceof Error?err.message:'Could not load hotspot passport','error')}
   },[notify])
-  const login = async (username: string, password: string, isDemo = false) => {
+  const login = async (username: string, password: string, isDemo = false, selectedRole?: string) => {
     setAuthLoading(true); setAuthError('')
     try {
       setActiveMode(isDemo ? 'demo' : 'operational')
       const response = await api.login(username, password, isDemo)
+
+      // The authenticated role returned by the backend is authoritative. Never grant permissions based on the selected card.
+      // If the selected role differs from the authenticated user's role, show a clear message and do not grant the requested role.
+      if (!isDemo && selectedRole && response.user.role !== selectedRole) {
+        clearToken('operational')
+        const roleLabels: Record<string, string> = {
+          resident: 'Resident (Citizen) — Citizen Experience',
+          worker: 'Field Worker — Worker Experience',
+          admin: 'Ward Supervisor — Supervisor Workbench',
+          receiver: 'Recovery Partner — Segregation & MRF'
+        }
+        const targetLabel = roleLabels[selectedRole] || selectedRole
+        const actualLabel = roleLabels[response.user.role] || nice(response.user.role)
+        throw new Error(`Role mismatch: Your account is provisioned as "${actualLabel}", which does not match the selected "${targetLabel}". Please select your assigned role card to sign in.`)
+      }
+
       setToken(response.access_token, isDemo ? 'demo' : 'operational')
       setUser(response.user)
       setDemoMode(isDemo)
@@ -123,7 +139,18 @@ export default function App(){
     api.me(mode).then(setUser).catch(() => { clearToken(mode); setUser(null) })
   }, [])
   useEffect(() => { if (user) void refresh(false) }, [user])
-  useEffect(() => { if (!user) return; const timer = window.setInterval(() => void refresh(true), 60000); return () => window.clearInterval(timer) }, [user, refresh])
+  useEffect(() => {
+    if (!user) return
+    // Lightweight polling every 20 seconds for active role dashboards
+    const timer = window.setInterval(() => void refresh(true), 20000)
+    // Instant refresh when window regains focus
+    const onFocus = () => void refresh(true)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [user, refresh])
   useEffect(() => { if (!user || !selectedId) return; api.passport(selectedId).then(setPassport).catch(() => setPassport(null)) }, [selectedId, user])
 
   const selected = hotspots.find(h => h.id === selectedId) || null

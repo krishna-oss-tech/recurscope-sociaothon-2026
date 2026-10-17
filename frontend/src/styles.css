@@ -191,3 +191,52 @@ html{scroll-behavior:smooth}body{background:var(--canvas)}button,input,select,te
 .demo-config-warning .warning-action{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:4px;padding-top:8px;border-top:1px solid #f4e1ba;font-size:11px}
 .demo-connected-chip{display:flex;align-items:center;gap:7px;background:#edf5ea;border:1px solid #c8ddc2;color:#285433;font:600 11px 'Space Grotesk',sans-serif;border-radius:7px;padding:7px 11px;margin-bottom:14px}
 .demo-role-card.demo-disabled{opacity:.6;filter:grayscale(.3);cursor:not-allowed}
+
+/* Selectable Operational Role Cards */
+.op-role-cards-container{display:grid;gap:8px;margin-bottom:16px}
+.field-hint-label{font:700 10px 'IBM Plex Mono',monospace;color:#678263;letter-spacing:.04em;text-transform:uppercase}
+.op-role-cards-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:600px){.op-role-cards-grid{grid-template-columns:1fr}}
+
+.op-role-select-card{background:#fff;border:1.5px solid #dbe6d7;border-radius:10px;padding:12px;display:grid;gap:8px;text-align:left;cursor:pointer;transition:all .18s;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.op-role-select-card:hover{border-color:#7fa67a;transform:translateY(-1px)}
+.op-role-select-card.selected{border-color:#2a573f;background:#f5f9f3;box-shadow:0 0 0 2px rgba(42,87,63,.15)}
+
+.op-role-select-header{display:flex;align-items:center;gap:10px}
+.op-role-icon-box{display:grid;place-items:center;width:28px;height:28px;border-radius:7px;flex-shrink:0}
+.op-role-icon-box.lime{background:#eef6e9;color:#286230}
+.op-role-icon-box.blue{background:#e7f0fa;color:#1e588f}
+.op-role-icon-box.teal{background:#e4f4f0;color:#185d55}
+.op-role-icon-box.amber{background:#fcf0df;color:#8f5c16}
+
+.op-role-title-wrap{display:grid;gap:1px;flex:1}
+.op-role-card-name{font:700 12px 'Space Grotesk',sans-serif;color:#20402b}
+.op-role-card-badge{font:600 8.5px 'IBM Plex Mono',monospace;color:#6d8869;text-transform:uppercase}
+
+.op-role-check-indicator{display:grid;place-items:center;width:18px;height:18px}
+.check-active{color:#2a573f}
+.check-inactive{width:14px;height:14px;border:1.5px solid #c8d8c3;border-radius:50%;display:inline-block}
+
+.op-role-select-desc{margin:0;font:400 11px/1.4 'DM Sans',sans-serif;color:#5a6e59}
+
+.op-role-reg-status{margin-top:2px}
+.reg-badge-open{display:inline-block;font:600 9px 'IBM Plex Mono',monospace;color:#226233;background:#e8f5e4;padding:2px 6px;border-radius:4px}
+.reg-badge-restricted{display:inline-block;font:600 9px 'IBM Plex Mono',monospace;color:#915a13;background:#fcf0df;padding:2px 6px;border-radius:4px}
+
+.op-selected-role-banner{display:flex;align-items:flex-start;gap:10px;background:#eef6eb;border:1px solid #c9ddc3;border-radius:8px;padding:10px 12px;margin-bottom:14px}
+.op-selected-role-banner .banner-icon{color:#2a573f;margin-top:2px;flex-shrink:0}
+.op-selected-role-banner .banner-text{font:400 11px/1.45 'DM Sans',sans-serif;color:#284d34}
+.op-selected-role-banner .banner-text>b{font-weight:700;color:#1b3824}
+.op-selected-role-banner .banner-text>small{display:block;margin-top:2px;color:#597a61;font-size:10px}
+
+.privileged-provisioning-box{background:#fff9f0;border:1.5px solid #f2d099;border-radius:12px;padding:20px;display:flex;gap:16px;align-items:flex-start;margin-top:14px}
+.provisioning-icon{color:#b36b0d;background:#feeecf;padding:10px;border-radius:10px;display:grid;place-items:center;flex-shrink:0}
+.provisioning-content{display:grid;gap:10px;flex:1}
+.provisioning-content h3{margin:0;font:700 14px 'Space Grotesk',sans-serif;color:#704006}
+.provisioning-content p{margin:0;font:400 12px/1.5 'DM Sans',sans-serif;color:#7a4f15}
+.provisioning-instructions{background:#fff3df;border-radius:8px;padding:10px 12px;display:grid;gap:6px;font:400 11px/1.4 'DM Sans',sans-serif;color:#6b420f}
+.provisioning-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+
+.op-form-section-head{display:grid;gap:3px;margin-bottom:12px;border-bottom:1px solid #e3ebd9;padding-bottom:8px}
+.op-form-section-head h3{margin:0;font:700 13px 'Space Grotesk',sans-serif;color:#1e432d}
+.op-form-section-head p{margin:0;font:400 11px 'DM Sans',sans-serif;color:#5a735a}

@@ -9,6 +9,8 @@ export function getOperationalBase(): string {
   if (env) return env.replace(/\/$/, '')
   if (runtime) return runtime.replace(/\/$/, '')
   if (import.meta.env.PROD) {
+    // In production, an empty string or relative path causes requests to hit Vercel frontend,
+    // which rewrites POST to /index.html and triggers HTTP 405 Method Not Allowed.
     return ''
   }
   const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
@@ -22,7 +24,7 @@ export function getDemoBase(): string {
   if (env) return env.replace(/\/$/, '')
   if (runtime) return runtime.replace(/\/$/, '')
   if (import.meta.env.PROD) {
-    // In production builds, demo service MUST be explicitly configured
+    // In production builds, demo service MUST be explicitly configured and isolated
     return ''
   }
   const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
@@ -31,12 +33,23 @@ export function getDemoBase(): string {
 
 export function isDemoConfigured(): boolean {
   if (!import.meta.env.PROD) {
-    return true // Local dev uses local backend
+    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    return isLocal
   }
   const demo = getDemoBase()
   const op = getOperationalBase()
-  // In production: demo API must be explicitly provided and not pointed to the operational backend
-  return Boolean(demo) && demo !== op
+  const isFrontendOrigin = typeof window !== 'undefined' && Boolean(demo) && demo.startsWith(window.location.origin)
+  return Boolean(demo) && demo !== op && !isFrontendOrigin
+}
+
+export function isOperationalConfigured(): boolean {
+  if (!import.meta.env.PROD) {
+    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    return isLocal
+  }
+  const op = getOperationalBase()
+  const isFrontendOrigin = typeof window !== 'undefined' && Boolean(op) && op.startsWith(window.location.origin)
+  return Boolean(op) && !isFrontendOrigin
 }
 
 let activeMode: AppMode = (typeof localStorage !== 'undefined' && (localStorage.getItem('recurscope_mode') as AppMode)) || 'operational'
@@ -85,7 +98,11 @@ export function getApiBase(mode?: AppMode): string {
     }
     return getDemoBase()
   }
-  return getOperationalBase()
+  const base = getOperationalBase()
+  if (import.meta.env.PROD && !base) {
+    throw new Error('Operational backend is not configured (missing VITE_API_BASE_URL). Please set the production backend URL in your environment settings.')
+  }
+  return base
 }
 
 export const API_BASE = getOperationalBase()
@@ -94,6 +111,10 @@ export async function request<T>(path: string, options: RequestInit = {}, mode?:
   const targetMode = mode || activeMode
   const base = getApiBase(targetMode)
   const token = getToken(targetMode)
+
+  if (typeof window !== 'undefined' && base && base.startsWith(window.location.origin)) {
+    throw new Error('API routing error: Backend URL points to the frontend web server instead of the FastAPI backend. Update VITE_API_BASE_URL to avoid HTTP 405.')
+  }
 
   const headers = new Headers(options.headers || {})
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -104,11 +125,15 @@ export async function request<T>(path: string, options: RequestInit = {}, mode?:
   let response: Response
   try {
     response = await fetch(`${base}${path}`, { ...options, headers })
-  } catch {
+  } catch (err: any) {
     if (targetMode === 'demo') {
       throw new Error(`Could not reach the isolated demo service at ${base || 'configured URL'}. Check that the demo backend is deployed and running.`)
     }
-    throw new Error('Could not reach RecurScope API. Start the backend and check the API URL.')
+    throw new Error(err?.message && !err.message.includes('fetch') ? err.message : 'Could not reach RecurScope API. Verify that the production backend is running and CORS allows this origin.')
+  }
+
+  if (response.status === 405) {
+    throw new Error(`HTTP 405 Method Not Allowed at ${base}${path}. The request reached a static host or frontend rewrite rather than the live FastAPI application. Verify VITE_API_BASE_URL.`)
   }
 
   const payload = await response.json().catch(() => ({}))
