@@ -200,6 +200,22 @@ def seed_demo(db: Session, reset: bool = False) -> None:
     db.add(Handoff(task_id=task3.id, stream="DRY", receiver_name="Sample MRF Receiver", quantity=12.5, unit="kg", status="PENDING",
                    notes="Synthetic material handoff awaiting confirmation", created_by_id=admin.id, is_demo=True))
     report("HS-042", 5, "SANITARY", "Sample sanitary waste requiring appropriate handling", "UNVERIFIED")
+    task_awaiting = seed_task(Task(code="TSK-042", hotspot_id=hotspots["HS-042"].id, assigned_worker_id=worker.id, created_by_id=admin.id,
+              due_at=now+timedelta(days=1), status="AWAITING_VERIFICATION", stream="SANITARY",
+              before_key="demo://before-042", after_key="demo://after-042",
+              before_latitude=hotspots["HS-042"].latitude, before_longitude=hotspots["HS-042"].longitude,
+              after_latitude=hotspots["HS-042"].latitude, after_longitude=hotspots["HS-042"].longitude,
+              after_uploaded_at=now-timedelta(hours=3),
+              notes="Cleaned and segregated into sanitary waste container; awaiting supervisor review.", is_demo=True,
+              created_at=now-timedelta(days=2)))
+    add_event(db, hotspots["HS-042"].id, "CLEANUP_SUBMITTED", "Worker uploaded cleanup evidence; awaiting supervisor verification",
+              worker.id, task_id=task_awaiting.id, evidence_key="demo://after-042", is_demo=True)
+    db.add(Handoff(task_id=task1.id, stream="DRY", receiver_name="Sample MRF Receiver", quantity=45.0, unit="kg", status="RECEIVED",
+                   notes="Confirmed receipt of segregated dry recyclables at central MRF", received_at=now-timedelta(days=11), created_by_id=admin.id, is_demo=True, created_at=now-timedelta(days=11)))
+    db.add(Handoff(task_id=old_clean.id, stream="WET", receiver_name="Sample MRF Receiver", quantity=80.0, unit="kg", status="RECEIVED",
+                   notes="Wet organic waste accepted at municipal bio-composting hub", received_at=now-timedelta(days=35), created_by_id=admin.id, is_demo=True, created_at=now-timedelta(days=35)))
+    db.add(Handoff(task_id=task_awaiting.id, stream="SANITARY", receiver_name="Sample MRF Receiver", quantity=15.0, unit="kg", status="PENDING",
+                   notes="Sanitary materials batch pending receiver intake inspection", created_by_id=admin.id, is_demo=True, created_at=now-timedelta(hours=2)))
     report("HS-051", 4, "MISSED_PICKUP", "Sample collection task overdue at drain-side point", "UNVERIFIED")
     task4 = seed_task(Task(code="TSK-051", hotspot_id=hotspots["HS-051"].id, assigned_worker_id=worker.id, created_by_id=admin.id,
               due_at=now-timedelta(days=1), status="ASSIGNED", stream="MIXED_UNKNOWN", notes="Overdue collection in sample data", is_demo=True))

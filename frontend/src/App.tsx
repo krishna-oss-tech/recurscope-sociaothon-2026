@@ -54,11 +54,15 @@ export default function App(){
   const [busy,setBusy]=useState(false)
   const [mobileNav,setMobileNav]=useState(false)
   const [demoMode,setDemoMode]=useState(false)
+  const [dataLoading,setDataLoading]=useState(false)
+  const [dataError,setDataError]=useState<string|null>(null)
 
   const notify=useCallback((message:string,kind:'success'|'error'|'info'='success')=>{
     setToast({message,kind}); window.setTimeout(()=>setToast(null),4200)
   },[])
   const refresh=useCallback(async (keepSelection=true, preferredId?:number|null)=>{
+    setDataLoading(true)
+    setDataError(null)
     try{
       const [s,h,t,i,ha,f,pcfg,reps]=await Promise.all([
         api.summary(),api.hotspots(),api.tasks(),api.interventions(),api.handoffs(),api.followups(),
@@ -71,7 +75,13 @@ export default function App(){
       setSelectedId(firstId)
       if(firstId){try{setPassport(await api.passport(firstId))}catch{setPassport(null)}}else setPassport(null)
       if(user&&user.role==='admin'){try{setWorkers(await api.users('worker'))}catch{setWorkers([])}}
-    }catch(err){notify(err instanceof Error?err.message:'Unable to load workspace data','error')}
+    }catch(err){
+      const msg = err instanceof Error ? err.message : 'Unable to load workspace data'
+      setDataError(msg)
+      notify(msg, 'error')
+    }finally{
+      setDataLoading(false)
+    }
   },[notify,selectedId,user])
   const chooseHotspot=useCallback(async(id:number)=>{
     setSelectedId(id)
@@ -130,13 +140,19 @@ export default function App(){
     }
   }
 
-  const logout = () => { clearToken(); setUser(null); setPassport(null); setToast(null) }
+  const logout = () => { clearToken(); setUser(null); setPassport(null); setToast(null); setPage('overview') }
   useEffect(() => {
     const mode = getActiveMode()
     api.health(mode).then(h => setDemoMode(Boolean(h.demo_mode))).catch(() => setDemoMode(mode === 'demo'))
     const token = getToken(mode)
     if (!token) return
-    api.me(mode).then(setUser).catch(() => { clearToken(mode); setUser(null) })
+    api.me(mode).then(u => {
+      setUser(u)
+      if (u.role === 'resident') setPage('reports')
+      else if (u.role === 'worker') setPage('tasks')
+      else if (u.role === 'receiver') setPage('recycling')
+      else setPage('overview')
+    }).catch(() => { clearToken(mode); setUser(null) })
   }, [])
   useEffect(() => { if (user) void refresh(false) }, [user])
   useEffect(() => {
@@ -237,7 +253,7 @@ export default function App(){
           <div className="nav-section-label">FIELD DISPATCH</div>
           <nav className="main-nav">
             <NavItem active={page === 'tasks' || page === 'overview'} icon={<ClipboardCheck size={18} />} label="My assigned tasks" count={tasks.filter(t => t.assigned_worker_id === user.id).length} onClick={() => { setPage('tasks'); setMobileNav(false) }} />
-            <NavItem active={page === 'hotspots'} icon={<MapPinned size={18} />} label="Task route map" onClick={() => { setPage('hotspots'); setMobileNav(false) }} />
+            <NavItem active={page === 'hotspots'} icon={<MapPinned size={18} />} label="Task route map" count={hotspots.filter(h => tasks.some(t => t.assigned_worker_id === user.id && t.hotspot_id === h.id)).length} onClick={() => { setPage('hotspots'); setMobileNav(false) }} />
           </nav>
         </>
       )}
@@ -270,27 +286,39 @@ export default function App(){
 
       <div className="sidebar-bottom">
         <div className="sidebar-help"><div className="help-icon"><ShieldCheck size={18} /></div><b>Evidence before closure</b><p>A closed task is not proof a hotspot stayed clean.</p></div>
-        <div className="user-card"><div className="avatar">{user.display_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}</div><div className="user-card-copy"><b>{user.display_name}</b><small>{nice(user.role)}</small></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={17} /></button></div>
+        <div className="user-card"><div className="avatar">{user.display_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}</div><div className="user-card-copy"><b>{user.display_name}</b><small>{nice(user.role)}</small></div><button type="button" className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={17} /></button></div>
       </div>
     </aside>
     <main className="main-area">
-      <header className="topbar rs-topbar"><div className="topbar-left"><button className="mobile-menu icon-btn" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="crumbs"><span>RecurScope</span><span className="crumb-slash">/</span><b>{meta.label}</b></div></div><div className="topbar-actions"><div className="status-pill"><span className="live-dot" /> {summary?.synthetic_data ? 'Local demo connected' : `Pilot active · ${pilot.name}`}</div><button className="icon-btn notification-btn" title="Refresh workspace" onClick={() => void refresh(true)}><RefreshCw size={17} /></button>{(user.role === 'admin' || summary?.synthetic_data) && <button className="btn btn-quiet btn-reset" onClick={() => runAction(() => api.resetDemo(), 'Demo reset complete. Scenario restored.')} disabled={busy}><RefreshCw size={15} /> Reset demo</button>}</div></header>
+      <header className="topbar rs-topbar"><div className="topbar-left"><button type="button" className="mobile-menu icon-btn" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="crumbs"><span>RecurScope</span><span className="crumb-slash">/</span><b>{meta.label}</b></div></div><div className="topbar-actions"><div className="status-pill"><span className="live-dot" /> {summary?.synthetic_data ? 'Local demo connected' : `Pilot active · ${pilot.name}`}</div><button type="button" className={`icon-btn notification-btn ${dataLoading ? 'spin' : ''}`} title="Refresh workspace data" onClick={() => void refresh(true)}><RefreshCw size={17} /></button>{(user.role === 'admin' || summary?.synthetic_data) && <button type="button" className="btn btn-quiet btn-reset" onClick={() => runAction(() => api.resetDemo(), 'Demo reset complete. Scenario restored.')} disabled={busy}><RefreshCw size={15} /> Reset demo</button>}</div></header>
       <div className="page-content">
         <div className="page-heading rs-page-heading">
           <div><div className="eyebrow green">{meta.label}</div><h1>{meta.title}</h1><p>{meta.desc}</p></div>
           <div className="heading-actions">
             <div className="last-updated"><span className="live-dot" /> Updates every minute</div>
             {user.role !== 'worker' && user.role !== 'receiver' && (
-              <button className="btn btn-primary" onClick={() => setReportOpen(true)}><Plus size={17} /> New report</button>
+              <button type="button" className="btn btn-primary" onClick={() => setReportOpen(true)}><Plus size={17} /> New report</button>
             )}
           </div>
         </div>
+
+        {dataError && (
+          <div className="error-banner">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <AlertTriangle size={18} />
+              <span><b>Data Loading Notice:</b> {dataError}</span>
+            </div>
+            <button type="button" className="btn btn-secondary btn-small" onClick={() => void refresh(true)}>
+              <RefreshCw size={14} /> Retry
+            </button>
+          </div>
+        )}
 
         {summary?.synthetic_data ? (
           <div className="demo-banner">
             <div className="demo-banner-icon"><CircleHelp size={18} /></div>
             <div><b>SIMULATED DATA MODE</b><span>Seeded sample records are for demonstration only. Do not present these as real municipal results.</span></div>
-            <button className="banner-close icon-btn" title="Dismiss" onClick={e => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none' }}><X size={16} /></button>
+            <button type="button" className="banner-close icon-btn" title="Dismiss" onClick={e => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none' }}><X size={16} /></button>
           </div>
         ) : (
           <div className="demo-banner pilot-banner">
@@ -302,21 +330,31 @@ export default function App(){
         {/* Dedicated Role-Based Experiences */}
         {user.role === 'resident' && (
           <CitizenPortal
+            page={page}
+            onNavigate={setPage}
             reports={reports}
             hotspots={hotspots}
             user={user}
             pilot={pilot}
+            selectedId={selectedId}
             onOpenReport={() => setReportOpen(true)}
             onSelectHotspot={id => { chooseHotspot(id); setPage('hotspots') }}
+            loading={dataLoading}
+            error={dataError}
+            onRefresh={() => void refresh(true)}
           />
         )}
 
         {user.role === 'worker' && (
           <WorkerPortal
+            page={page}
+            onNavigate={setPage}
             tasks={tasks}
             hotspots={hotspots}
             user={user}
             pilot={pilot}
+            selectedId={selectedId}
+            onSelectHotspot={id => { chooseHotspot(id); setPage('hotspots') }}
             onStart={startTask}
             onEvidence={submitEvidence}
             onFinish={finishTask}
@@ -324,6 +362,9 @@ export default function App(){
               await runAction(() => api.updateTask(taskId, { stream }), 'Waste stream updated.')
             }}
             busy={busy}
+            loading={dataLoading}
+            error={dataError}
+            onRefresh={() => void refresh(true)}
           />
         )}
 
@@ -359,7 +400,7 @@ export default function App(){
 }
 
 function NavItem({active,icon,label,count,onClick}:{active:boolean;icon:ReactNode;label:string;count?:number;onClick:()=>void}){
-  return <button className={`nav-item ${active?'nav-item-active':''}`} onClick={onClick}>{icon}<span>{label}</span>{count!==undefined&&<small>{count}</small>}</button>
+  return <button type="button" className={`nav-item ${active?'nav-item-active':''}`} onClick={onClick} aria-current={active ? 'page' : undefined}>{icon}<span>{label}</span>{count!==undefined&&<small>{count}</small>}</button>
 }
 function StatCard({label,value,detail,icon,accent,change}:{label:string;value:string|number;detail:string;icon:ReactNode;accent:string;change?:'up'|'down'|'flat'}){
   return <div className="stat-card"><div className={`stat-icon ${accent}`}>{icon}</div><div className="stat-main"><span>{label}</span><b>{value}</b><small>{change==='up'?<ArrowUpRight size={13}/>:change==='down'?<ArrowDownRight size={13}/>:null}{detail}</small></div></div>
@@ -749,22 +790,34 @@ function TimelineModal({ reportId, onClose }: { reportId: number; onClose: () =>
 }
 
 function CitizenPortal({
+  page,
+  onNavigate,
   reports,
   hotspots,
   user,
   pilot,
+  selectedId,
   onOpenReport,
   onSelectHotspot,
+  loading,
+  error,
+  onRefresh,
 }: {
+  page: Page
+  onNavigate: (page: Page) => void
   reports: Report[]
   hotspots: Hotspot[]
   user: User
   pilot: PilotConfig
+  selectedId?: number | null
   onOpenReport: () => void
   onSelectHotspot: (id: number) => void
+  loading?: boolean
+  error?: string | null
+  onRefresh?: () => void
 }) {
-  const [activeTab, setActiveTab] = useState<'my_reports' | 'community_map'>('my_reports')
   const [timelineReportId, setTimelineReportId] = useState<number | null>(null)
+  const isMap = page === 'hotspots'
 
   const STAGES = [
     { key: 'SUBMITTED', label: '1. Submitted', num: 1 },
@@ -790,26 +843,46 @@ function CitizenPortal({
   return (
     <div className="citizen-portal">
       <div className="section-toolbar">
-        <div className="filter-pills">
+        <div className="filter-pills" role="tablist">
           <button
-            className={activeTab === 'my_reports' ? 'filter-pill-active' : ''}
-            onClick={() => setActiveTab('my_reports')}
+            type="button"
+            role="tab"
+            aria-selected={!isMap}
+            className={!isMap ? 'filter-pill-active' : ''}
+            onClick={() => onNavigate('reports')}
           >
             <ClipboardCheck size={15} /> My Reports & Progress ({reports.length})
           </button>
           <button
-            className={activeTab === 'community_map' ? 'filter-pill-active' : ''}
-            onClick={() => setActiveTab('community_map')}
+            type="button"
+            role="tab"
+            aria-selected={isMap}
+            className={isMap ? 'filter-pill-active' : ''}
+            onClick={() => onNavigate('hotspots')}
           >
             <MapPinned size={15} /> Community Hotspots ({hotspots.length})
           </button>
         </div>
-        <button className="btn btn-primary" onClick={onOpenReport}>
+        <button type="button" className="btn btn-primary" onClick={onOpenReport}>
           <Plus size={16} /> Report waste issue
         </button>
       </div>
 
-      {activeTab === 'my_reports' && (
+      {error && (
+        <div className="error-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AlertTriangle size={18} />
+            <span>{error}</span>
+          </div>
+          {onRefresh && (
+            <button type="button" className="btn btn-secondary btn-small" onClick={onRefresh}>
+              <RefreshCw size={14} /> Retry
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isMap ? (
         <div className="citizen-reports-grid">
           {reports.map(report => {
             const currentStageIdx = getStageIdx(report.lifecycle_stage)
@@ -861,11 +934,11 @@ function CitizenPortal({
                   </div>
                   <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
                     {report.hotspot_id && (
-                      <button className="btn btn-secondary btn-small" onClick={() => onSelectHotspot(report.hotspot_id!)}>
+                      <button type="button" className="btn btn-secondary btn-small" onClick={() => onSelectHotspot(report.hotspot_id!)}>
                         <MapPinned size={14} /> View Hotspot
                       </button>
                     )}
-                    <button className="btn btn-quiet btn-small" onClick={() => setTimelineReportId(report.id)}>
+                    <button type="button" className="btn btn-quiet btn-small" onClick={() => setTimelineReportId(report.id)}>
                       <Activity size={14} /> View Timeline
                     </button>
                   </div>
@@ -874,30 +947,101 @@ function CitizenPortal({
             )
           })}
 
-          {reports.length === 0 && (
+          {reports.length === 0 && !loading && (
             <section className="panel">
               <Empty
                 title="No reports submitted yet"
                 text="Notice an uncollected pile or chronic waste dumping in your neighbourhood? Submit a report with a pin and photo to start the cleanup workflow."
               />
+              <div style={{ textAlign: 'center', marginTop: 14 }}>
+                <button type="button" className="btn btn-primary" onClick={onOpenReport}>
+                  <Plus size={16} /> Submit Your First Report
+                </button>
+              </div>
+            </section>
+          )}
+
+          {loading && reports.length === 0 && (
+            <section className="panel" style={{ padding: 32, textAlign: 'center' }}>
+              <RefreshCw className="spin" size={24} style={{ color: '#2a573f', margin: '0 auto 12px' }} />
+              <p style={{ margin: 0, color: '#5b6f5d' }}>Loading your reports & progress…</p>
             </section>
           )}
         </div>
-      )}
-
-      {activeTab === 'community_map' && (
-        <div className="panel map-panel">
-          <div className="panel-header">
-            <div>
-              <h2>Community Waste Hotspots</h2>
-              <p>Privacy-safe public overview of monitored waste locations in {pilot.name}. Personal reporter identities remain hidden.</p>
+      ) : (
+        <div className="citizen-map-section" style={{ display: 'grid', gap: 16 }}>
+          <div className="panel map-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Community Waste Hotspots</h2>
+                <p>Privacy-safe public overview of monitored waste locations in {pilot.name}. Personal reporter identities remain hidden.</p>
+              </div>
+            </div>
+            <MapView hotspots={hotspots} selectedId={selectedId || null} onSelect={onSelectHotspot} defaultCenter={[pilot.latitude, pilot.longitude]} />
+            <div className="map-bottom-row">
+              <span><b>{hotspots.length}</b> locations tracked</span>
+              <span>Coordinates verified within pilot boundary</span>
             </div>
           </div>
-          <MapView hotspots={hotspots} selectedId={null} onSelect={onSelectHotspot} defaultCenter={[pilot.latitude, pilot.longitude]} />
-          <div className="map-bottom-row">
-            <span><b>{hotspots.length}</b> locations tracked</span>
-            <span>Coordinates verified within pilot boundary</span>
-          </div>
+
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <h3>Monitored Public Hotspot List ({hotspots.length})</h3>
+                <p>Canonical waste locations monitored for recurring dumping in {pilot.name}.</p>
+              </div>
+            </div>
+            {hotspots.length > 0 ? (
+              <div className="public-hotspots-grid">
+                {hotspots.map(h => (
+                  <div
+                    key={h.id}
+                    className={`public-hotspot-card ${selectedId === h.id ? 'hotspot-card-selected' : ''}`}
+                    style={{
+                      border: selectedId === h.id ? '2px solid #2a573f' : '1px solid #dce5d8',
+                      background: selectedId === h.id ? '#f5f9f3' : '#fff',
+                      borderRadius: 10,
+                      padding: 14,
+                      display: 'grid',
+                      gap: 8
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <b style={{ color: '#1e402b', fontSize: '13px' }}>{h.code} · {h.label}</b>
+                      <StatusPill value={h.status} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#68806a' }}>
+                      <span>Ward: {h.ward}</span>
+                      {h.recurrence_count > 0 && <span style={{ color: '#a63a1e', fontWeight: 600 }}>Recurrence: {h.recurrence_count}x</span>}
+                    </div>
+                    {h.last_verified_cleanup_at && (
+                      <small style={{ color: '#2b653f', fontSize: '10.5px' }}>
+                        Last cleaned: {fmtDate(h.last_verified_cleanup_at)}
+                      </small>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => onSelectHotspot(h.id)}
+                      style={{ marginTop: 4, width: '100%', justifyContent: 'center' }}
+                    >
+                      <MapPin size={13} /> {selectedId === h.id ? 'Focused on map' : 'Locate on map'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : !loading ? (
+              <Empty
+                title="No public hotspots recorded"
+                text="No community waste hotspots have been recorded in this pilot area yet."
+              />
+            ) : (
+              <div style={{ padding: 24, textAlign: 'center' }}>
+                <RefreshCw className="spin" size={20} style={{ color: '#2a573f', margin: '0 auto 8px' }} />
+                <p style={{ margin: 0, color: '#5b6f5d' }}>Loading community hotspots…</p>
+              </div>
+            )}
+          </section>
         </div>
       )}
 
@@ -909,31 +1053,54 @@ function CitizenPortal({
 }
 
 function WorkerPortal({
+  page,
+  onNavigate,
   tasks,
   hotspots,
   user,
   pilot,
+  selectedId,
+  onSelectHotspot,
   onStart,
   onEvidence,
   onFinish,
   onUpdateStream,
   busy,
+  loading,
+  error,
+  onRefresh,
 }: {
+  page: Page
+  onNavigate: (page: Page) => void
   tasks: Task[]
   hotspots: Hotspot[]
   user: User
   pilot: PilotConfig
+  selectedId?: number | null
+  onSelectHotspot: (id: number) => void
   onStart: (task: Task) => void
   onEvidence: (task: Task, kind: 'before' | 'after', file: File) => void
   onFinish: (task: Task) => void
   onUpdateStream: (taskId: number, stream: string) => Promise<void>
   busy: boolean
+  loading?: boolean
+  error?: string | null
+  onRefresh?: () => void
 }) {
   const [filter, setFilter] = useState<'ACTIVE' | 'AWAITING_VERIFICATION' | 'ALL'>('ACTIVE')
+  const isMap = page === 'hotspots'
 
   const myTasks = useMemo(() => {
     return tasks.filter(t => t.assigned_worker_id === user.id)
   }, [tasks, user.id])
+
+  const assignedHotspotIds = useMemo(() => {
+    return new Set(myTasks.map(t => t.hotspot_id))
+  }, [myTasks])
+
+  const assignedHotspots = useMemo(() => {
+    return hotspots.filter(h => assignedHotspotIds.has(h.id))
+  }, [hotspots, assignedHotspotIds])
 
   const visibleTasks = useMemo(() => {
     if (filter === 'ACTIVE') {
@@ -948,42 +1115,169 @@ function WorkerPortal({
   return (
     <div className="worker-portal">
       <div className="section-toolbar">
-        <div className="filter-pills">
-          <button className={filter === 'ACTIVE' ? 'filter-pill-active' : ''} onClick={() => setFilter('ACTIVE')}>
+        <div className="filter-pills" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isMap && filter === 'ACTIVE'}
+            className={!isMap && filter === 'ACTIVE' ? 'filter-pill-active' : ''}
+            onClick={() => { onNavigate('tasks'); setFilter('ACTIVE') }}
+          >
             Active Assignments ({myTasks.filter(t => t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS').length})
           </button>
-          <button className={filter === 'AWAITING_VERIFICATION' ? 'filter-pill-active' : ''} onClick={() => setFilter('AWAITING_VERIFICATION')}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isMap && filter === 'AWAITING_VERIFICATION'}
+            className={!isMap && filter === 'AWAITING_VERIFICATION' ? 'filter-pill-active' : ''}
+            onClick={() => { onNavigate('tasks'); setFilter('AWAITING_VERIFICATION') }}
+          >
             Under Review ({myTasks.filter(t => t.status === 'AWAITING_VERIFICATION').length})
           </button>
-          <button className={filter === 'ALL' ? 'filter-pill-active' : ''} onClick={() => setFilter('ALL')}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isMap && filter === 'ALL'}
+            className={!isMap && filter === 'ALL' ? 'filter-pill-active' : ''}
+            onClick={() => { onNavigate('tasks'); setFilter('ALL') }}
+          >
             All My Tasks ({myTasks.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isMap}
+            className={isMap ? 'filter-pill-active' : ''}
+            onClick={() => onNavigate('hotspots')}
+          >
+            <MapPinned size={14} /> Task Route Map ({assignedHotspots.length})
           </button>
         </div>
       </div>
 
-      <div className="worker-tasks-list">
-        {visibleTasks.map(task => (
-          <WorkerTaskItem
-            key={task.id}
-            task={task}
-            hotspots={hotspots}
-            onStart={onStart}
-            onEvidence={onEvidence}
-            onFinish={onFinish}
-            onUpdateStream={onUpdateStream}
-            busy={busy}
-          />
-        ))}
+      {error && (
+        <div className="error-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AlertTriangle size={18} />
+            <span>{error}</span>
+          </div>
+          {onRefresh && (
+            <button type="button" className="btn btn-secondary btn-small" onClick={onRefresh}>
+              <RefreshCw size={14} /> Retry
+            </button>
+          )}
+        </div>
+      )}
 
-        {visibleTasks.length === 0 && (
-          <section className="panel">
-            <Empty
-              title="No tasks in this view"
-              text={filter === 'ACTIVE' ? "You have no active collection tasks right now. Great job!" : "No tasks matching this status."}
+      {isMap ? (
+        <div className="worker-map-section" style={{ display: 'grid', gap: 16 }}>
+          <div className="panel map-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Field Route Map & Task Locations</h2>
+                <p>Geographic view of your assigned collection tasks across {pilot.name}.</p>
+              </div>
+            </div>
+            <MapView
+              hotspots={assignedHotspots.length ? assignedHotspots : hotspots}
+              selectedId={selectedId || null}
+              onSelect={onSelectHotspot}
+              defaultCenter={[pilot.latitude, pilot.longitude]}
             />
+            <div className="map-bottom-row">
+              <span><b>{assignedHotspots.length}</b> assigned task locations</span>
+              <span>Coordinates verified within pilot boundary</span>
+            </div>
+          </div>
+
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <h3>Assigned Collection Stops</h3>
+                <p>Collection routes sorted by assignment priority and location.</p>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+              {myTasks.map(t => {
+                const h = hotspots.find(x => x.id === t.hotspot_id)
+                return (
+                  <div
+                    key={t.id}
+                    style={{
+                      border: selectedId === t.hotspot_id ? '2px solid #2a573f' : '1px solid #dce5d8',
+                      background: selectedId === t.hotspot_id ? '#f5f9f3' : '#fff',
+                      borderRadius: 10,
+                      padding: 14,
+                      display: 'grid',
+                      gap: 8
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <b style={{ color: '#1e402b' }}>{t.code}</b>
+                      <StatusPill value={t.status} />
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#4d6350' }}>
+                      {h ? `${h.code} · ${h.label} (${h.ward})` : 'Location assigned'}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#6e8571' }}>
+                      Stream: <b>{nice(t.stream)}</b> · Due: {dueLabel(t.due_at)}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => { if (t.hotspot_id) onSelectHotspot(t.hotspot_id) }}
+                        style={{ flex: 1, justifyContent: 'center' }}
+                      >
+                        <MapPin size={13} /> Map Stop
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-small"
+                        onClick={() => onNavigate('tasks')}
+                        style={{ flex: 1, justifyContent: 'center' }}
+                      >
+                        Open Task
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </section>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="worker-tasks-list">
+          {visibleTasks.map(task => (
+            <WorkerTaskItem
+              key={task.id}
+              task={task}
+              hotspots={hotspots}
+              onStart={onStart}
+              onEvidence={onEvidence}
+              onFinish={onFinish}
+              onUpdateStream={onUpdateStream}
+              busy={busy}
+            />
+          ))}
+
+          {visibleTasks.length === 0 && !loading && (
+            <section className="panel">
+              <Empty
+                title="No tasks in this view"
+                text={filter === 'ACTIVE' ? "You have no active collection tasks right now. Great job!" : "No tasks matching this status."}
+              />
+            </section>
+          )}
+
+          {loading && visibleTasks.length === 0 && (
+            <section className="panel" style={{ padding: 32, textAlign: 'center' }}>
+              <RefreshCw className="spin" size={24} style={{ color: '#2a573f', margin: '0 auto 12px' }} />
+              <p style={{ margin: 0, color: '#5b6f5d' }}>Loading tasks…</p>
+            </section>
+          )}
+        </div>
+      )}
 
       <div className="workflow-note">
         <ShieldCheck size={18} />
