@@ -4,15 +4,17 @@ import {
   ChevronDown, ClipboardCheck, Clock3, Download, FileCheck2, Filter, Home, Leaf, LogOut,
   MapPinned, Menu, Plus, Recycle, RefreshCw, Search, ShieldCheck, Trash2, Truck, Users,
   X, Workflow, CalendarClock, PackageCheck, CircleHelp, ExternalLink, Camera, MapPin, LocateFixed,
+  Sliders,
 } from 'lucide-react'
 import Login from './components/Login'
 import MapView from './components/MapView'
 import LocationPicker from './components/LocationPicker'
+import PilotSettings from './components/PilotSettings'
 import { api, getToken, setToken, API_BASE, type HotspotCandidate } from './lib/api'
 import type { User, Hotspot, Task, Passport, Summary, Intervention, Handoff, FollowUp, Report, PilotConfig } from './lib/types'
 import './styles.css'
 
-type Page = 'overview'|'hotspots'|'tasks'|'reports'|'interventions'|'recycling'
+type Page = 'overview'|'hotspots'|'tasks'|'reports'|'interventions'|'recycling'|'settings'
 const STREAMS = ['WET','DRY','SANITARY','SPECIAL_CARE','MIXED_UNKNOWN']
 const ISSUES = ['DUMPING','MISSED_PICKUP','MIXED_WASTE','DRY_RECYCLABLES','SANITARY','SPECIAL_CARE','SHARP_OR_HAZARDOUS','BURNING','OTHER']
 const pageCopy:Record<Page,{label:string;title:string;desc:string}> = {
@@ -22,6 +24,7 @@ const pageCopy:Record<Page,{label:string;title:string;desc:string}> = {
   reports:{label:'EVIDENCE RECORDS',title:'Incident reports',desc:'Track genuine user-submitted reports, location accuracy, and verification status.'},
   interventions:{label:'PREVENTION',title:'Intervention Ledger',desc:'Track suspected causes as hypotheses, actions, owners and outcomes.'},
   recycling:{label:'RECOVERY & MEASUREMENT',title:'Segregation & impact',desc:'Follow waste streams to a named receiver and measure only recorded outcomes.'},
+  settings:{label:'ADMINISTRATION',title:'Pilot settings',desc:'Manage the configured geographic monitoring area, operational centre, boundary radius, and default ward.'},
 }
 const fmtDate=(value?:string|null)=>value?new Date(value).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}):'—'
 const fmtTime=(value?:string|null)=>value?new Date(value).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'—'
@@ -125,6 +128,27 @@ export default function App(){
     await runAction(()=>api.verifyTask(task.id,approved,reviewNote),approved?'Cleanup verified. Follow-up was scheduled.':'Evidence rejected; task reopened for correction.')
   }
 
+  useEffect(()=>{
+    const handleHash=()=>{
+      const hash=window.location.hash.replace(/^#\/?/,'').toLowerCase()
+      if(hash==='settings'||hash==='pilot-settings'){
+        setPage('settings')
+      }else if(['overview','hotspots','tasks','reports','interventions','recycling'].includes(hash)){
+        setPage(hash as Page)
+      }
+    }
+    handleHash()
+    window.addEventListener('hashchange',handleHash)
+    return()=>window.removeEventListener('hashchange',handleHash)
+  },[])
+  useEffect(()=>{
+    const currentHash=window.location.hash.replace(/^#\/?/,'').toLowerCase()
+    const targetHash=page==='overview'?'':page
+    if(currentHash!==targetHash){
+      window.location.hash=targetHash
+    }
+  },[page])
+
   if(!user)return <Login onLogin={login} loading={authLoading} error={authError}/>
   const meta=pageCopy[page]
   return <div className="app-shell rs-v05">
@@ -143,6 +167,14 @@ export default function App(){
         <NavItem active={page==='interventions'} icon={<Workflow size={18}/>} label="Intervention Ledger" count={interventions.filter(i=>i.status==='OPEN'||i.status==='IN_PROGRESS').length} onClick={()=>{setPage('interventions');setMobileNav(false)}}/>
         <NavItem active={page==='recycling'} icon={<Recycle size={18}/>} label="Segregation & impact" onClick={()=>{setPage('recycling');setMobileNav(false)}}/>
       </nav>
+      {user.role==='admin'&&(
+        <>
+          <div className="nav-section-label">ADMINISTRATION</div>
+          <nav className="main-nav">
+            <NavItem active={page==='settings'} icon={<Sliders size={18}/>} label="Pilot settings" onClick={()=>{setPage('settings');setMobileNav(false)}}/>
+          </nav>
+        </>
+      )}
       <div className="sidebar-bottom">
         <div className="sidebar-help"><div className="help-icon"><ShieldCheck size={18}/></div><b>Evidence before closure</b><p>A closed task is not proof a hotspot stayed clean.</p></div>
         <div className="user-card"><div className="avatar">{user.display_name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase()}</div><div className="user-card-copy"><b>{user.display_name}</b><small>{nice(user.role)}</small></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={17}/></button></div>
@@ -159,6 +191,7 @@ export default function App(){
         {page==='tasks'&&<TasksPage tasks={tasks} hotspots={hotspots} workers={workers} user={user} busy={busy} onCreate={(body)=>runAction(()=>api.createTask(body),'Collection task created.')} onUpdate={(id,body)=>runAction(()=>api.updateTask(id,body),'Task updated.')} onStart={startTask} onEvidence={submitEvidence} onFinish={finishTask} onVerify={verifyTask}/>}
         {page==='interventions'&&<InterventionsPage interventions={interventions} hotspots={hotspots} followups={followups} user={user} busy={busy} onCreate={(h,body)=>runAction(()=>api.createIntervention(h,body),'Preventive intervention created.')} onUpdate={(id,body)=>runAction(()=>api.updateIntervention(id,body),'Intervention updated.')}/>}
         {page==='recycling'&&<RecyclingPage handoffs={handoffs} tasks={tasks} summary={summary} user={user} busy={busy} onCreate={(body)=>runAction(()=>api.createHandoff(body),'Handoff record created.')} onUpdate={(id,body)=>runAction(()=>api.updateHandoff(id,body),'Handoff status updated.')}/>}
+        {page==='settings'&&<PilotSettings user={user} onPilotUpdated={(updated)=>{setPilot(updated);notify(`Pilot area "${updated.name}" updated successfully.`,'success')}} onNavigate={setPage}/>}
         <footer className="app-footer"><span>RecurScope · SOCIAOTHON 2026 · PS 06</span><span>Operational priority rules · no unvalidated AI claims</span></footer>
       </div>
     </main>

@@ -15,7 +15,22 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   try { response = await fetch(`${API_BASE}${path}`, { ...options, headers }) }
   catch { throw new Error('Could not reach RecurScope API. Start the backend and check the API URL.') }
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.detail || payload.message || `Request failed (${response.status})`)
+  if (!response.ok) {
+    let errorMsg = payload.message || `Request failed (${response.status})`
+    if (typeof payload.detail === 'string') {
+      errorMsg = payload.detail
+    } else if (Array.isArray(payload.detail)) {
+      errorMsg = payload.detail
+        .map((item: any) => item.msg || item.message || JSON.stringify(item))
+        .join('; ')
+    } else if (payload.detail && typeof payload.detail === 'object') {
+      errorMsg = JSON.stringify(payload.detail)
+    }
+    const err: any = new Error(errorMsg)
+    err.status = response.status
+    err.payload = payload
+    throw err
+  }
   return payload as T
 }
 export type HotspotCandidate = { id:number; code:string; label:string; ward:string; distance_m:number; status:string }

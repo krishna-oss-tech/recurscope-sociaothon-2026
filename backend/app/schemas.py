@@ -66,3 +66,11 @@ class RecurrenceConfirm(BaseModel):
 
 class AssociateReport(BaseModel):
     hotspot_id: int
+
+
+class PilotConfigUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_km: float | None = Field(default=None, gt=0, le=200)
+    default_ward: str | None = Field(default=None, min_length=1, max_length=80)

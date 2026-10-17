@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from .database import Base, engine, get_db, SessionLocal
 from .models import User, Hotspot, Report, Task, HotspotEvent, Intervention, FollowUp, Handoff, AuditLog, AppSetting
 from .schemas import (LoginRequest, TaskCreate, TaskUpdate, FollowUpCreate, InterventionCreate,
-                      InterventionUpdate, HandoffCreate, HandoffUpdate, RecurrenceConfirm, AssociateReport)
+                      InterventionUpdate, HandoffCreate, HandoffUpdate, RecurrenceConfirm, AssociateReport,
+                      PilotConfigUpdate)
 from .security import verify_password, create_access_token, get_current_user, allow_roles
 from .logic import utcnow, as_naive_utc, distance_m, add_event, score_hotspot
 from .seed import seed_demo, bootstrap_admin
@@ -370,31 +371,39 @@ def get_pilot_config(db: Session = Depends(get_db), user: User = Depends(get_cur
 
 
 @app.patch("/api/config/pilot")
-def update_pilot_config(payload: dict, db: Session = Depends(get_db), user: User = Depends(allow_roles("admin"))):
-    if "name" in payload and payload["name"]:
-        val = str(payload["name"]).strip()[:100]
+def update_pilot_config(payload: PilotConfigUpdate, db: Session = Depends(get_db), user: User = Depends(allow_roles("admin"))):
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data:
+        val = (data["name"] or "").strip()[:100]
+        if not val:
+            raise HTTPException(422, "Pilot area name cannot be empty")
         setting = db.get(AppSetting, "pilot_name") or AppSetting(key="pilot_name", value=val)
         setting.value = val; db.add(setting)
-    if "latitude" in payload:
-        lat = float(payload["latitude"])
-        if not (-90 <= lat <= 90): raise HTTPException(422, "Invalid latitude")
+    if "latitude" in data:
+        lat = data["latitude"]
+        if lat is None or not (-90 <= lat <= 90):
+            raise HTTPException(422, "Invalid latitude")
         setting = db.get(AppSetting, "pilot_lat") or AppSetting(key="pilot_lat", value=str(lat))
         setting.value = str(lat); db.add(setting)
-    if "longitude" in payload:
-        lng = float(payload["longitude"])
-        if not (-180 <= lng <= 180): raise HTTPException(422, "Invalid longitude")
+    if "longitude" in data:
+        lng = data["longitude"]
+        if lng is None or not (-180 <= lng <= 180):
+            raise HTTPException(422, "Invalid longitude")
         setting = db.get(AppSetting, "pilot_lng") or AppSetting(key="pilot_lng", value=str(lng))
         setting.value = str(lng); db.add(setting)
-    if "radius_km" in payload:
-        rad = float(payload["radius_km"])
-        if rad <= 0 or rad > 200: raise HTTPException(422, "Radius must be between 0.1 and 200 km")
+    if "radius_km" in data:
+        rad = data["radius_km"]
+        if rad is None or rad <= 0 or rad > 200:
+            raise HTTPException(422, "Radius must be between 0.1 and 200 km")
         setting = db.get(AppSetting, "pilot_radius_km") or AppSetting(key="pilot_radius_km", value=str(rad))
         setting.value = str(rad); db.add(setting)
-    if "default_ward" in payload and payload["default_ward"]:
-        val = str(payload["default_ward"]).strip()[:80]
+    if "default_ward" in data:
+        val = (data["default_ward"] or "").strip()[:80]
+        if not val:
+            raise HTTPException(422, "Default ward cannot be empty")
         setting = db.get(AppSetting, "pilot_default_ward") or AppSetting(key="pilot_default_ward", value=val)
         setting.value = val; db.add(setting)
-    _audit(db, user.id, "PILOT_CONFIG_UPDATED", "config", "pilot", json.dumps(payload))
+    _audit(db, user.id, "PILOT_CONFIG_UPDATED", "config", "pilot", json.dumps(data))
     db.commit()
     return _get_pilot_config(db)
 
