@@ -675,3 +675,51 @@ def test_report_timeline_access():
         # User B cannot view User A's timeline (403)
         b_res = client.get(f"/api/reports/{rep_id}/timeline", headers=headers_b)
         assert b_res.status_code == 403
+
+
+def test_production_rejects_default_demo_credentials(monkeypatch):
+    with TestClient(app) as client:
+        # In production mode, all default demo credentials must be rejected with 401
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        for demo_pw in ["admin123", "worker123", "citizen123", "receiver123"]:
+            res = client.post("/api/auth/login", json={"username": "admin", "password": demo_pw})
+            assert res.status_code == 401
+            assert "Default demo credentials cannot be used in production environments" in res.json()["detail"]
+
+        # In development, provision a test user
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        admin_headers = auth(client, "admin", "admin123")
+        ts = int(datetime.now(timezone.utc).timestamp())
+        res = client.post("/api/users", headers=admin_headers, json={
+            "username": f"prod_staff_{ts}", "display_name": "Prod Staff", "role": "admin", "password": "SecurePassword123!"
+        })
+        assert res.status_code == 200
+
+        # Now in production, provisioned user can log in successfully
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        prod_login = client.post("/api/auth/login", json={"username": f"prod_staff_{ts}", "password": "SecurePassword123!"})
+        assert prod_login.status_code == 200
+        assert "access_token" in prod_login.json()
+
+
+def test_demo_reset_cannot_modify_operational_records_in_production(monkeypatch):
+    with TestClient(app) as client:
+        # Create an operational report in development
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        admin_headers = auth(client, "admin", "admin123")
+        rep = client.post("/api/reports", headers=admin_headers, data={
+            "issue_type": "DUMPING", "description": "Operational record before demo reset attempt",
+            "ward": "Ward 01", "lat": 21.1458, "lng": 79.0882, "consent": "true"
+        }, files={"photo": ("photo.png", png_bytes(), "image/png")}).json()
+        op_rep_id = rep["report"]["id"]
+
+        # In production with default ALLOW_DEMO_RESET=false, reset must be blocked
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("ALLOW_DEMO_RESET", "false")
+        reset_res = client.post("/api/demo/reset", headers=admin_headers)
+        assert reset_res.status_code == 403
+
+        # Operational report still exists and untouched
+        rep_check = client.get("/api/reports?mine=false", headers=admin_headers)
+        assert rep_check.status_code == 200
+        assert any(r["id"] == op_rep_id for r in rep_check.json())

@@ -44,7 +44,8 @@
 
 | Variable | Required | Default | Production Value | Description |
 |---|:---:|---|---|---|
-| `VITE_API_BASE_URL` | Optional | `""` | `https://your-recurscope-api.onrender.com` | Base URL of the backend API. If omitted on non-localhost domains, frontend defaults to relative `/` (ideal for reverse proxies) |
+| `VITE_API_BASE_URL` | Optional | `""` | `https://your-recurscope-api.onrender.com` | Base URL of the live operational backend API. If omitted on non-localhost domains, frontend defaults to relative `/` (for reverse proxies) |
+| `VITE_DEMO_API_BASE_URL` | Recommended | `""` | `https://your-recurscope-demo-api.onrender.com` | Base URL of the isolated demo backend service with synthetic records. If unset in production, demo mode shows an incomplete configuration notice |
 
 ---
 
@@ -127,24 +128,60 @@ This is the primary production architecture for RecurScope. It provides independ
    - **Framework Preset**: `Vite` (auto-detected).
    - **Build Command**: `npm run build`
    - **Output Directory**: `dist`
-2. **Configure Frontend Environment Variable**:
+2. **Configure Frontend Environment Variables**:
    ```env
+   # 1. Operational Pilot Backend (strict production authentication & live PostgreSQL)
    VITE_API_BASE_URL=https://<your-render-service>.onrender.com
+
+   # 2. Isolated Demo Backend (sandbox with synthetic seed records & demo reset)
+   VITE_DEMO_API_BASE_URL=https://<your-render-demo-service>.onrender.com
    ```
    > [!IMPORTANT]
-   > The frontend requires `VITE_API_BASE_URL` in production builds. The client build never silently falls back to `localhost` when deployed on a remote domain.
+   > - **Mode Isolation**: When the user selects **Explore Demo**, all authentication, tasks, reports, and resets strictly target `VITE_DEMO_API_BASE_URL`.
+   > - **Operational Security**: When the user selects **Operational Login**, all requests target `VITE_API_BASE_URL`. Default demo credentials are never sent to the production operational API.
+   > - If `VITE_DEMO_API_BASE_URL` is omitted, the frontend clearly indicates that the demo service is unconfigured, preventing misconfigured demo requests against live production records.
 3. **Routing**:
    - Handled via [`frontend/vercel.json`](file:///d:/RecurScope_MVP_v0.5/RecurScope_MVP_v0.5/frontend/vercel.json) rewrite rule `/(.*) -> /index.html` for clean client-side SPA routing.
 
-### Step 3: Verification Checklist
+### Step 3: Deploy Isolated Demo Service on Render (Optional for Demo Mode)
+
+To provide the Explore Demo experience alongside the operational pilot without compromising production security:
+
+1. **Create a Second Render Web Service**:
+   - **Name**: `recurscope-demo-api`
+   - **Root Directory**: `backend`
+   - **Build Command**: `pip install -r requirements.txt -r requirements-postgres.txt`
+   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+2. **Configure Demo Environment Variables**:
+   ```env
+   ENVIRONMENT=development
+   SEED_DEMO=true
+   ALLOW_DEMO_RESET=true
+   DATABASE_URL=sqlite:////app/storage/demo.db
+   ALLOW_SQLITE_IN_PRODUCTION=true
+   EVIDENCE_DIR=/app/storage/demo_evidence
+   ALLOW_EPHEMERAL_STORAGE=true
+   SECRET_KEY=<generate-separate-demo-secret>
+   CORS_ORIGINS=https://<your-vercel-domain>.vercel.app
+   CORS_ORIGIN_REGEX=^https:\/\/.*\.vercel\.app$
+   ```
+3. **Add Demo URL to Vercel**:
+   - In Vercel Project Settings -> Environment Variables:
+   - Add `VITE_DEMO_API_BASE_URL=https://recurscope-demo-api.onrender.com`.
+   - Redeploy the frontend.
+
+### Step 4: Verification Checklist
 
 1. Visit `https://<your-render-service>.onrender.com/health`:
    - Returns status: `{"ok": true, "service": "recurscope-api", "version": "0.5.0", "database": "connected", "environment": "production", "demo_mode": false}`.
 2. Visit `https://<your-vercel-domain>.vercel.app`:
-   - Login page renders in **Operational Pilot** mode without demo quick-access buttons.
-   - Pre-filled demo credentials are absent.
-   - Log in using your configured `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD`.
-   - Admin can securely provision pilot field workers and residents via the API.
+   - **Explore Demo**:
+     - If `VITE_DEMO_API_BASE_URL` is set: clicking demo role cards authenticates against the isolated demo backend with simulated records.
+     - If `VITE_DEMO_API_BASE_URL` is unset: shows clear warning that demo service configuration is incomplete.
+   - **Operational Login**:
+     - Connects exclusively to the production API.
+     - Default demo passwords (`admin123`, `worker123`, etc.) are blocked.
+     - Provisioned municipal staff and registered residents log in to genuine operational records.
 
 ### Option B: Single Host / VPS via Docker Compose
 
