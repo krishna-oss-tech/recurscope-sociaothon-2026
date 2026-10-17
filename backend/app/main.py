@@ -6,19 +6,20 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+import time
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from sqlalchemy import func, text
+from sqlalchemy import func, text, or_
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db, SessionLocal
 from .models import User, Hotspot, Report, Task, HotspotEvent, Intervention, FollowUp, Handoff, AuditLog, AppSetting
 from .schemas import (LoginRequest, TaskCreate, TaskUpdate, FollowUpCreate, InterventionCreate,
-                      InterventionUpdate, HandoffCreate, HandoffUpdate, RecurrenceConfirm, AssociateReport)
-from .security import verify_password, create_access_token, get_current_user, allow_roles
+                      InterventionUpdate, HandoffCreate, HandoffUpdate, RecurrenceConfirm, AssociateReport, UserCreate)
+from .security import verify_password, create_access_token, get_current_user, allow_roles, hash_password
 from .logic import utcnow, as_naive_utc, distance_m, add_event, score_hotspot
 from .seed import seed_demo, bootstrap_admin
 
@@ -29,6 +30,41 @@ HOTSPOT_RADIUS_METERS = float(os.getenv("HOTSPOT_RADIUS_METERS", "100"))
 ALLOWED_STREAMS = {"WET", "DRY", "SANITARY", "SPECIAL_CARE", "MIXED_UNKNOWN"}
 ALLOWED_ISSUES = {"DUMPING", "MISSED_PICKUP", "MIXED_WASTE", "DRY_RECYCLABLES", "SANITARY", "SPECIAL_CARE", "SHARP_OR_HAZARDOUS", "BURNING", "OTHER"}
 TASK_STATES = {"ASSIGNED", "IN_PROGRESS", "AWAITING_VERIFICATION", "VERIFIED_RESOLVED", "REJECTED"}
+DEMO_PASSWORDS = {"admin123", "worker123", "citizen123", "receiver123"}
+
+
+class InMemoryRateLimiter:
+    def __init__(self, max_requests: int, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.records: dict[str, list[float]] = {}
+
+    def check(self, key: str, action: str = "request") -> None:
+        now = time.time()
+        timestamps = self.records.get(key, [])
+        cutoff = now - self.window_seconds
+        valid = [t for t in timestamps if t > cutoff]
+        if len(valid) >= self.max_requests:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded for {action}. Please wait before trying again."
+            )
+        valid.append(now)
+        self.records[key] = valid
+
+
+def get_client_ip(request: Request | None) -> str:
+    if not request:
+        return "127.0.0.1"
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "127.0.0.1"
+
+
+login_limiter = InMemoryRateLimiter(max_requests=int(os.getenv("LOGIN_RATE_LIMIT", "60")), window_seconds=60)
+report_limiter = InMemoryRateLimiter(max_requests=int(os.getenv("REPORT_RATE_LIMIT", "30")), window_seconds=60)
+evidence_limiter = InMemoryRateLimiter(max_requests=int(os.getenv("EVIDENCE_RATE_LIMIT", "40")), window_seconds=60)
 
 DEFAULT_PILOT_CONFIG = {
     "name": os.getenv("PILOT_NAME", "Nagpur Central Pilot"),
@@ -113,9 +149,9 @@ async def app_lifespan(_app: FastAPI):
 app = FastAPI(title="RecurScope API", version=APP_VERSION, lifespan=app_lifespan,
               description="Evidence-led recurring waste hotspot workflow. Demo records are synthetic.")
 
-cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:5188,http://127.0.0.1:5188")
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:5188,http://127.0.0.1:5188,http://localhost:3000,http://127.0.0.1:3000")
 origins = [x.strip() for x in cors_origins_env.split(",") if x.strip()]
-cors_origin_regex = os.getenv("CORS_ORIGIN_REGEX")
+cors_origin_regex = os.getenv("CORS_ORIGIN_REGEX", r"^https:\/\/.*\.vercel\.app$")
 
 if "*" in origins:
     # Starlette disallows allow_credentials=True when allow_origins=["*"]
@@ -290,6 +326,7 @@ def _handoff_dict(db: Session, h: Handoff) -> dict:
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health(db: Session = Depends(get_db)):
     db_ok = True
     db_status = "connected"
@@ -298,18 +335,27 @@ def health(db: Session = Depends(get_db)):
     except Exception as exc:
         db_ok = False
         db_status = f"unhealthy: {exc}"
+    env = os.getenv("ENVIRONMENT", "development").lower()
+    seed_demo = os.getenv("SEED_DEMO", "").lower() in {"true", "1", "yes"}
+    is_demo = (env != "production") or seed_demo
     return {
         "ok": db_ok,
         "service": "recurscope-api",
         "version": APP_VERSION,
         "database": db_status,
-        "environment": os.getenv("ENVIRONMENT", "development"),
+        "environment": env,
+        "demo_mode": is_demo,
     }
 
 
 @app.post("/api/auth/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == payload.username).first()
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(request)
+    login_limiter.check(client_ip, action="login")
+    env = os.getenv("ENVIRONMENT", "development").lower()
+    if env == "production" and payload.password in DEMO_PASSWORDS:
+        raise HTTPException(401, "Default demo credentials cannot be used in production environments. Please use your provisioned credentials.")
+    user = db.query(User).filter(User.username == payload.username.strip()).first()
     if not user or not user.active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "Incorrect username or password")
     return {"access_token": create_access_token(user), "token_type": "bearer", "user": _user_dict(user)}
@@ -326,6 +372,27 @@ def list_users(role: str | None = None, db: Session = Depends(get_db), user: Use
     if role:
         query = query.filter(User.role == role)
     return [_user_dict(x) for x in query.order_by(User.display_name).all()]
+
+
+@app.post("/api/users")
+def provision_user(payload: UserCreate, db: Session = Depends(get_db), user: User = Depends(allow_roles("admin"))):
+    username = payload.username.strip().lower()
+    existing = db.query(User).filter(func.lower(User.username) == username).first()
+    if existing:
+        raise HTTPException(409, f"Username '{username}' already exists")
+    new_user = User(
+        username=username,
+        display_name=payload.display_name.strip(),
+        role=payload.role,
+        password_hash=hash_password(payload.password),
+        active=True
+    )
+    db.add(new_user)
+    db.flush()
+    _audit(db, user.id, "USER_PROVISIONED", "user", new_user.id, f"username={username};role={new_user.role}")
+    db.commit()
+    db.refresh(new_user)
+    return _user_dict(new_user)
 
 
 @app.get("/api/summary")
@@ -454,6 +521,8 @@ def hotspot_passport(hotspot_id: int, db: Session = Depends(get_db), user: User 
     if not hotspot:
         raise HTTPException(404, "Hotspot not found")
     reports = db.query(Report).filter(Report.hotspot_id == hotspot_id).order_by(Report.created_at.desc()).all()
+    if user.role == "resident":
+        reports = [r for r in reports if r.reporter_id == user.id]
     tasks = db.query(Task).filter(Task.hotspot_id == hotspot_id).order_by(Task.created_at.desc()).all()
     events = db.query(HotspotEvent).filter(HotspotEvent.hotspot_id == hotspot_id).order_by(HotspotEvent.created_at.desc()).all()
     actor_ids = {e.actor_id for e in events if e.actor_id}
@@ -484,8 +553,12 @@ def list_reports(hotspot_id: int | None = None, mine: bool = False,
 @app.post("/api/reports")
 def create_report(issue_type: str = Form(...), description: str = Form(""), ward: str = Form("Ward 01"),
                   lat: float = Form(...), lng: float = Form(...), gps_accuracy_m: float | None = Form(None),
-                  hotspot_id: int | None = Form(None), photo: UploadFile | None = File(None),
-                  db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+                  hotspot_id: int | None = Form(None), consent: bool = Form(True), photo: UploadFile | None = File(None),
+                  request: Request = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    client_ip = get_client_ip(request) if request else "127.0.0.1"
+    report_limiter.check(f"{user.id}:{client_ip}", action="report submission")
+    if not consent:
+        raise HTTPException(422, "Citizen consent is required to process reports and photographs.")
     issue_type = issue_type.strip().upper()
     if issue_type not in ALLOWED_ISSUES:
         raise HTTPException(422, "Unsupported issue type")
@@ -544,9 +617,11 @@ def create_report(issue_type: str = Form(...), description: str = Form(""), ward
 
 
 @app.post("/api/reports/{report_id}/evidence")
-def attach_report_evidence(report_id: int, photo: UploadFile = File(...),
+def attach_report_evidence(report_id: int, photo: UploadFile = File(...), request: Request = None,
                            db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Attach additional image evidence to the existing report; never create a duplicate incident."""
+    client_ip = get_client_ip(request) if request else "127.0.0.1"
+    evidence_limiter.check(f"{user.id}:{client_ip}", action="photo evidence upload")
     report = db.get(Report, report_id)
     if not report:
         raise HTTPException(404, "Report not found")
@@ -619,7 +694,10 @@ def list_tasks(status: str | None = None, db: Session = Depends(get_db), user: U
     if user.role == "worker":
         query = query.filter(Task.assigned_worker_id == user.id)
     elif user.role == "receiver":
-        routed_task_ids = [h.task_id for h in db.query(Handoff).filter(Handoff.receiver_name == user.display_name).all()]
+        routed_task_ids = [h.task_id for h in db.query(Handoff).filter(
+            or_(func.lower(Handoff.receiver_name) == user.display_name.lower(),
+                func.lower(Handoff.receiver_name) == user.username.lower())
+        ).all()]
         query = query.filter(Task.id.in_(routed_task_ids)) if routed_task_ids else query.filter(Task.id == -1)
     elif user.role == "resident":
         own_hotspot_ids = [r.hotspot_id for r in db.query(Report).filter(Report.reporter_id == user.id).all()]
@@ -680,7 +758,10 @@ def start_task(task_id: int, db: Session = Depends(get_db), user: User = Depends
 
 @app.post("/api/tasks/{task_id}/evidence")
 def upload_task_evidence(task_id: int, kind: str = Form(...), latitude: float = Form(...), longitude: float = Form(...),
-                         photo: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(allow_roles("admin", "worker"))):
+                         photo: UploadFile = File(...), request: Request = None,
+                         db: Session = Depends(get_db), user: User = Depends(allow_roles("admin", "worker"))):
+    client_ip = get_client_ip(request) if request else "127.0.0.1"
+    evidence_limiter.check(f"{user.id}:{client_ip}", action="task evidence upload")
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -903,8 +984,10 @@ def update_intervention(intervention_id: int, payload: InterventionUpdate, db: S
 def list_handoffs(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = db.query(Handoff)
     if user.role == "receiver":
-        # The MVP partner account is scoped to receiver-labelled handoffs; a production deployment should map this to a receiver ID.
-        query = query.filter(func.lower(Handoff.receiver_name).like("%receiver%"))
+        query = query.filter(or_(
+            func.lower(Handoff.receiver_name) == user.display_name.lower(),
+            func.lower(Handoff.receiver_name) == user.username.lower()
+        ))
     return [_handoff_dict(db, h) for h in query.order_by(Handoff.created_at.desc()).all()]
 
 
@@ -938,7 +1021,7 @@ def update_handoff(handoff_id: int, payload: HandoffUpdate, db: Session = Depend
     item = db.get(Handoff, handoff_id)
     if not item:
         raise HTTPException(404, "Handoff not found")
-    if user.role == "receiver" and item.receiver_name != user.display_name:
+    if user.role == "receiver" and item.receiver_name.strip().lower() not in {user.display_name.strip().lower(), user.username.strip().lower()}:
         raise HTTPException(403, "This handoff is routed to a different receiver")
     status = payload.status.upper()
     if status not in {"PENDING", "RECEIVED", "REJECTED", "FAILED"}:
@@ -960,6 +1043,9 @@ def list_followups(db: Session = Depends(get_db), user: User = Depends(get_curre
     if user.role == "worker":
         assigned_hotspots = [t.hotspot_id for t in db.query(Task).filter(Task.assigned_worker_id == user.id).all()]
         query = query.filter(FollowUp.hotspot_id.in_(assigned_hotspots)) if assigned_hotspots else query.filter(FollowUp.id == -1)
+    elif user.role == "resident":
+        own_hotspot_ids = [r.hotspot_id for r in db.query(Report).filter(Report.reporter_id == user.id).all()]
+        query = query.filter(FollowUp.hotspot_id.in_(own_hotspot_ids)) if own_hotspot_ids else query.filter(FollowUp.id == -1)
     rows = query.order_by(FollowUp.scheduled_at).all()
     return [_followup_dict(f) | {"hotspot_code": db.get(Hotspot, f.hotspot_id).code} for f in rows]
 
@@ -1008,4 +1094,12 @@ def get_evidence(key: str, db: Session = Depends(get_db), user: User = Depends(g
     path = (EVIDENCE_DIR / key).resolve()
     if not path.is_relative_to(EVIDENCE_DIR) or not path.exists():
         raise HTTPException(404, "Evidence file not found")
+    if user.role == "resident":
+        # Residents are restricted to evidence associated with their own reports or verified resolution on their reported hotspots
+        own_report = db.query(Report).filter(Report.photo_key == key, Report.reporter_id == user.id).first()
+        if not own_report:
+            own_hotspot_ids = [r.hotspot_id for r in db.query(Report).filter(Report.reporter_id == user.id).all()]
+            is_own_hotspot_after = db.query(Task).filter(Task.after_key == key, Task.hotspot_id.in_(own_hotspot_ids)).first()
+            if not is_own_hotspot_after:
+                raise HTTPException(403, "You are not authorized to view this evidence.")
     return FileResponse(path, media_type="image/jpeg")

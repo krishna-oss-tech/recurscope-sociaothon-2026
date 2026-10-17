@@ -66,3 +66,10 @@ class RecurrenceConfirm(BaseModel):
 
 class AssociateReport(BaseModel):
     hotspot_id: int
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_\-\.]+$")
+    display_name: str = Field(min_length=2, max_length=120)
+    role: str = Field(pattern=r"^(admin|worker|resident|receiver)$")
+    password: str = Field(min_length=8, max_length=128)

@@ -53,6 +53,7 @@ export default function App(){
   const [toast,setToast]=useState<{message:string;kind:'success'|'error'|'info'}|null>(null)
   const [busy,setBusy]=useState(false)
   const [mobileNav,setMobileNav]=useState(false)
+  const [demoMode,setDemoMode]=useState(false)
 
   const notify=useCallback((message:string,kind:'success'|'error'|'info'='success')=>{
     setToast({message,kind}); window.setTimeout(()=>setToast(null),4200)
@@ -83,7 +84,11 @@ export default function App(){
     finally{setAuthLoading(false)}
   }
   const logout=()=>{setToken('');setUser(null);setPassport(null);setToast(null)}
-  useEffect(()=>{if(!getToken())return;api.me().then(setUser).catch(()=>{setToken('');setUser(null)})},[])
+  useEffect(()=>{
+    api.health().then(h=>setDemoMode(Boolean(h.demo_mode))).catch(()=>setDemoMode(false))
+    if(!getToken())return;
+    api.me().then(setUser).catch(()=>{setToken('');setUser(null)})
+  },[])
   useEffect(()=>{if(user)void refresh(false)},[user])
   useEffect(()=>{if(!user)return;const timer=window.setInterval(()=>void refresh(true),60000);return()=>window.clearInterval(timer)},[user,refresh])
   useEffect(()=>{if(!user||!selectedId)return;api.passport(selectedId).then(setPassport).catch(()=>setPassport(null))},[selectedId,user])
@@ -125,7 +130,7 @@ export default function App(){
     await runAction(()=>api.verifyTask(task.id,approved,reviewNote),approved?'Cleanup verified. Follow-up was scheduled.':'Evidence rejected; task reopened for correction.')
   }
 
-  if(!user)return <Login onLogin={login} loading={authLoading} error={authError}/>
+  if(!user)return <Login onLogin={login} loading={authLoading} error={authError} demoMode={demoMode}/>
   const meta=pageCopy[page]
   return <div className="app-shell rs-v05">
     <aside className={`sidebar ${mobileNav?'sidebar-open':''}`}>

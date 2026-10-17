@@ -57,5 +57,7 @@ export const api = {
   getPilotConfig: () => request<PilotConfig>('/api/config/pilot'),
   updatePilotConfig: (body:Partial<PilotConfig>) => request<PilotConfig>('/api/config/pilot', {method:'PATCH',body:JSON.stringify(body)}),
   analytics: () => request<any>('/api/analytics/ward'),
+  health: () => request<{ok:boolean;service:string;version:string;database:string;environment:string;demo_mode:boolean}>('/health'),
+  provisionUser: (body:{username:string;display_name:string;role:string;password:string}) => request<User>('/api/users', {method:'POST',body:JSON.stringify(body)}),
 }
 export function evidenceUrl(key:string | null) { return key && key.endsWith('.jpg') ? `${API_BASE}/api/evidence/${key}` : null }

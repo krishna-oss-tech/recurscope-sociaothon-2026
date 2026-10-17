@@ -413,3 +413,108 @@ def test_demo_reset_preserves_real_operational_records():
         hs = client.get(f"/api/hotspots/{real_hotspot_id}/passport", headers=admin_headers)
         assert hs.status_code == 200
         assert hs.json()["hotspot"]["is_demo"] is False
+
+
+def test_admin_user_provisioning_and_rbac():
+    with TestClient(app) as client:
+        admin_headers = auth(client, "admin", "admin123")
+        resident_headers = auth(client, "resident", "citizen123")
+
+        # Non-admin cannot provision users
+        denied = client.post("/api/users", headers=resident_headers, json={
+            "username": "unauthorized_user", "display_name": "Unauthorized",
+            "role": "resident", "password": "Password123!"
+        })
+        assert denied.status_code == 403
+
+        # Admin provisions a genuine pilot resident
+        username = f"pilot_res_{int(datetime.now(timezone.utc).timestamp())}"
+        created = client.post("/api/users", headers=admin_headers, json={
+            "username": username, "display_name": "Pilot Resident Anita",
+            "role": "resident", "password": "PilotResidentPass2026!"
+        })
+        assert created.status_code == 200
+        user_data = created.json()
+        assert user_data["username"] == username
+        assert user_data["role"] == "resident"
+        assert "password" not in user_data
+
+        # Duplicate username returns 409
+        dup = client.post("/api/users", headers=admin_headers, json={
+            "username": username, "display_name": "Duplicate Anita",
+            "role": "resident", "password": "AnotherPassword123!"
+        })
+        assert dup.status_code == 409
+
+        # Newly provisioned user can log in
+        login_res = client.post("/api/auth/login", json={"username": username, "password": "PilotResidentPass2026!"})
+        assert login_res.status_code == 200
+        assert "access_token" in login_res.json()
+
+
+def test_resident_evidence_privacy_and_passport_isolation():
+    with TestClient(app) as client:
+        admin_headers = auth(client, "admin", "admin123")
+        ts = int(datetime.now(timezone.utc).timestamp())
+        user_a = f"alice_{ts}"
+        user_b = f"bob_{ts}"
+
+        # Provision Alice and Bob
+        client.post("/api/users", headers=admin_headers, json={"username": user_a, "display_name": "Alice A", "role": "resident", "password": "AlicePassword123!"})
+        client.post("/api/users", headers=admin_headers, json={"username": user_b, "display_name": "Bob B", "role": "resident", "password": "BobPassword123!"})
+
+        alice_token = client.post("/api/auth/login", json={"username": user_a, "password": "AlicePassword123!"}).json()["access_token"]
+        bob_token = client.post("/api/auth/login", json={"username": user_b, "password": "BobPassword123!"}).json()["access_token"]
+        alice_headers = {"Authorization": f"Bearer {alice_token}"}
+        bob_headers = {"Authorization": f"Bearer {bob_token}"}
+
+        # Alice creates a report with photo evidence
+        photo_data = png_bytes()
+        rep_res = client.post("/api/reports", headers=alice_headers, data={
+            "issue_type": "DUMPING", "description": "Alice private photo",
+            "ward": "Ward 01", "lat": 21.1458, "lng": 79.0882, "consent": "true"
+        }, files={"photo": ("evidence.png", photo_data, "image/png")})
+        assert rep_res.status_code == 200
+        photo_key = rep_res.json()["report"]["photo_key"]
+        hotspot_id = rep_res.json()["hotspot"]["id"]
+        assert photo_key is not None
+
+        # Alice can fetch her own evidence
+        alice_fetch = client.get(f"/api/evidence/{photo_key}", headers=alice_headers)
+        assert alice_fetch.status_code == 200
+
+        # Bob CANNOT fetch Alice's evidence (returns 403 Forbidden)
+        bob_fetch = client.get(f"/api/evidence/{photo_key}", headers=bob_headers)
+        assert bob_fetch.status_code == 403
+
+        # Bob inspecting hotspot passport does not see Alice's reports
+        bob_passport = client.get(f"/api/hotspots/{hotspot_id}/passport", headers=bob_headers).json()
+        assert not any(r["photo_key"] == photo_key for r in bob_passport["reports"])
+
+        # Alice inspecting hotspot passport sees her own report
+        alice_passport = client.get(f"/api/hotspots/{hotspot_id}/passport", headers=alice_headers).json()
+        assert any(r["photo_key"] == photo_key for r in alice_passport["reports"])
+
+
+def test_consent_handling_and_production_lockout():
+    import os
+    with TestClient(app) as client:
+        resident_headers = auth(client, "resident", "citizen123")
+
+        # Report without consent is rejected
+        rejected = client.post("/api/reports", headers=resident_headers, data={
+            "issue_type": "DUMPING", "description": "No consent given",
+            "ward": "Ward 01", "lat": 21.1458, "lng": 79.0882, "consent": "false"
+        })
+        assert rejected.status_code == 422
+        assert "consent is required" in rejected.json()["detail"].lower()
+
+        # In production mode, demo password login is rejected
+        old_env = os.environ.get("ENVIRONMENT", "development")
+        try:
+            os.environ["ENVIRONMENT"] = "production"
+            prod_login = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+            assert prod_login.status_code == 401
+            assert "default demo credentials cannot be used" in prod_login.json()["detail"].lower()
+        finally:
+            os.environ["ENVIRONMENT"] = old_env

@@ -169,3 +169,43 @@ The system does not depend on a hard-coded location. The operational pilot geogr
 - **User-submitted reports**: Marked with `is_demo=False`, creating real hotspots (`is_demo=False`, codes `HS-100+`), events, and tasks.
 - **Demo Reset Protection**: In development or demo mode, `POST /api/demo/reset` will only purge records where `is_demo=True`. All operational reports, verified cleanups, and field records are strictly preserved.
 - **Pure Production Bootstrapping**: Setting `ENVIRONMENT=production` ensures no synthetic demo records are created on startup. A production admin account is provisioned via `INITIAL_ADMIN_PASSWORD` (or `ADMIN_BOOTSTRAP_PASSWORD`).
+
+---
+
+## 7. Pilot Security, Identity, Consent & Data-Retention Gate
+
+### A. Production Identity & Admin-Controlled Provisioning
+- **Safe Pilot Onboarding**: Public unrestricted self-registration is disabled. Pilot participants (residents, field workers, recovery partners) are provisioned directly by an authorised administrator via `POST /api/users`.
+  ```json
+  POST /api/users
+  Headers: { "Authorization": "Bearer <admin-token>" }
+  {
+    "username": "resident_ravi",
+    "display_name": "Ravi Sharma",
+    "role": "resident",
+    "password": "SecurePilotPassword2026!"
+  }
+  ```
+- **Password Security**: Passwords are never logged or returned in responses. Hashing is performed via PBKDF2-HMAC-SHA256 with 210,000 iterations and 16-byte random salts.
+- **Demo Credential Lockout**: In production (`ENVIRONMENT=production`), default demo passwords (`admin123`, `worker123`, `citizen123`, `receiver123`) are explicitly rejected by the authentication layer, and quick-login demo buttons are automatically removed from the login interface.
+
+### B. Role-Based Access & Evidence Isolation
+- **Resident Privacy**:
+  - `GET /api/reports`: Residents only see reports they submitted (`reporter_id == user.id`).
+  - `GET /api/hotspots/{id}/passport`: Reports list is restricted to the requesting resident's own reports.
+  - `GET /api/evidence/{key}`: Residents are forbidden (`HTTP 403`) from accessing photo evidence keys submitted by other residents.
+- **Field Worker Authorization**: Workers can only inspect, start, add evidence to, and submit tasks assigned to their user ID (`task.assigned_worker_id == user.id`).
+- **Recovery Partner Authorization**: Recycling handoffs are matched to the authenticated recovery partner's verified username or display name rather than demo substrings.
+
+### C. Citizen Consent, Evidence Sanitization & Data Retention
+- **Informed Citizen Consent**: Report submission requires explicit consent confirmation that the location and photo are provided for municipal waste case handling.
+- **Image Content & EXIF Sanitization**:
+  - Max upload size is strictly capped at 5 MB (`MAX_UPLOAD_MB`).
+  - Uploaded files are verified using PIL/Pillow for valid image headers (JPEG, PNG, WebP).
+  - Images are re-encoded to clean JPEG (quality 86, max 1800x1800) with server-generated UUID filenames. This completely strips embedded EXIF metadata and prevents polyglot attacks.
+- **Data Retention Schedule**:
+  - **Active Operational Period**: Reports and evidence photos remain active until hotspot cleanup is verified.
+  - **Post-Verification Retention**: Records and evidence are preserved for 90 days following verified cleanup for follow-up recurrence tracking.
+  - **Data Minimization**: Personal resident contact details (e.g., phone, email) are never stored in incident report tables; identity is maintained solely by internal user foreign key.
+- **Abuse Protections & Rate Limiting**:
+  - In-memory rate limiting throttles authentication (`POST /api/auth/login`), report submissions (`POST /api/reports`), and image uploads (`POST /api/*/evidence`) to protect against brute-force attacks and automated flooding.
