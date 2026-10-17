@@ -9,7 +9,7 @@ import Login from './components/Login'
 import MapView from './components/MapView'
 import LocationPicker from './components/LocationPicker'
 import { api, getToken, setToken, API_BASE, type HotspotCandidate } from './lib/api'
-import type { User, Hotspot, Task, Passport, Summary, Intervention, Handoff, FollowUp, Report, PilotConfig } from './lib/types'
+import type { User, Hotspot, Task, Passport, Summary, Intervention, Handoff, FollowUp, Report, PilotConfig, ReportTimelineEvent } from './lib/types'
 import './styles.css'
 
 type Page = 'overview'|'hotspots'|'tasks'|'reports'|'interventions'|'recycling'
@@ -77,98 +77,253 @@ export default function App(){
     setSelectedId(id)
     try{setPassport(await api.passport(id))}catch(err){notify(err instanceof Error?err.message:'Could not load hotspot passport','error')}
   },[notify])
-  const login=async(username:string,password:string)=>{
-    setAuthLoading(true);setAuthError('')
-    try{const response=await api.login(username,password);setToken(response.access_token);setUser(response.user);setPage('overview');notify(`Signed in as ${response.user.display_name}`,'success')}
-    catch(err){setAuthError(err instanceof Error?err.message:'Sign-in failed')}
-    finally{setAuthLoading(false)}
+  const login = async (username: string, password: string, isDemo = false) => {
+    setAuthLoading(true); setAuthError('')
+    try {
+      const response = await api.login(username, password)
+      setToken(response.access_token)
+      setUser(response.user)
+      setDemoMode(isDemo)
+      if (response.user.role === 'worker') setPage('tasks')
+      else if (response.user.role === 'receiver') setPage('recycling')
+      else if (response.user.role === 'resident') setPage('reports')
+      else setPage('overview')
+      notify(`Signed in as ${response.user.display_name}`, 'success')
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Sign-in failed')
+    } finally {
+      setAuthLoading(false)
+    }
   }
-  const logout=()=>{setToken('');setUser(null);setPassport(null);setToast(null)}
-  useEffect(()=>{
-    api.health().then(h=>setDemoMode(Boolean(h.demo_mode))).catch(()=>setDemoMode(false))
-    if(!getToken())return;
-    api.me().then(setUser).catch(()=>{setToken('');setUser(null)})
-  },[])
-  useEffect(()=>{if(user)void refresh(false)},[user])
-  useEffect(()=>{if(!user)return;const timer=window.setInterval(()=>void refresh(true),60000);return()=>window.clearInterval(timer)},[user,refresh])
-  useEffect(()=>{if(!user||!selectedId)return;api.passport(selectedId).then(setPassport).catch(()=>setPassport(null))},[selectedId,user])
 
-  const selected=hotspots.find(h=>h.id===selectedId)||null
-  const filteredHotspots=useMemo(()=>hotspots.filter(h=>{
-    const q=search.toLowerCase();const match=!q||`${h.code} ${h.label} ${h.ward} ${h.latest_issue||''}`.toLowerCase().includes(q)
-    const status=filterStatus==='ALL'||h.status===filterStatus
-    const ward=filterWard==='ALL'||h.ward===filterWard
-    const priority=filterPriority==='ALL'||h.priority.band===filterPriority
-    const ageDays=(Date.now()-new Date(h.last_seen_at).getTime())/86400000
-    const age=filterAge==='ALL'||(filterAge==='24H'&&ageDays<=1)||(filterAge==='7D'&&ageDays<=7)||(filterAge==='30D'&&ageDays<=30)
-    return match&&status&&ward&&priority&&age
-  }),[hotspots,search,filterStatus,filterWard,filterPriority,filterAge])
+  const register = async (data: { username: string; password: string; display_name: string; ward?: string; consent: boolean }) => {
+    setAuthLoading(true); setAuthError('')
+    try {
+      const response = await api.register(data)
+      setToken(response.access_token)
+      setUser(response.user)
+      setDemoMode(false)
+      setPage('reports')
+      notify(`Welcome ${response.user.display_name}! Your resident account has been created.`, 'success')
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Registration failed')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
 
-  async function runAction(action:()=>Promise<unknown>, success?:string):Promise<boolean>{
+  const logout = () => { setToken(''); setUser(null); setPassport(null); setToast(null) }
+  useEffect(() => {
+    api.health().then(h => setDemoMode(Boolean(h.demo_mode))).catch(() => setDemoMode(false))
+    if (!getToken()) return;
+    api.me().then(setUser).catch(() => { setToken(''); setUser(null) })
+  }, [])
+  useEffect(() => { if (user) void refresh(false) }, [user])
+  useEffect(() => { if (!user) return; const timer = window.setInterval(() => void refresh(true), 60000); return () => window.clearInterval(timer) }, [user, refresh])
+  useEffect(() => { if (!user || !selectedId) return; api.passport(selectedId).then(setPassport).catch(() => setPassport(null)) }, [selectedId, user])
+
+  const selected = hotspots.find(h => h.id === selectedId) || null
+  const filteredHotspots = useMemo(() => hotspots.filter(h => {
+    const q = search.toLowerCase(); const match = !q || `${h.code} ${h.label} ${h.ward} ${h.latest_issue || ''}`.toLowerCase().includes(q)
+    const status = filterStatus === 'ALL' || h.status === filterStatus
+    const ward = filterWard === 'ALL' || h.ward === filterWard
+    const priority = filterPriority === 'ALL' || h.priority.band === filterPriority
+    const ageDays = (Date.now() - new Date(h.last_seen_at).getTime()) / 86400000
+    const age = filterAge === 'ALL' || (filterAge === '24H' && ageDays <= 1) || (filterAge === '7D' && ageDays <= 7) || (filterAge === '30D' && ageDays <= 30)
+    return match && status && ward && priority && age
+  }), [hotspots, search, filterStatus, filterWard, filterPriority, filterAge])
+
+  async function runAction(action: () => Promise<unknown>, success?: string): Promise<boolean> {
     setBusy(true)
-    try{
-      const result=await action()
-      if(success)notify(success);else if(result&&typeof result==='object'&&'message' in result)notify(String((result as any).message))
-      const preferredId=result&&typeof result==='object'&&'hotspot' in result&&Number.isFinite(Number((result as any).hotspot?.id))?Number((result as any).hotspot.id):undefined
-      await refresh(true,preferredId)
+    try {
+      const result = await action()
+      if (success) notify(success); else if (result && typeof result === 'object' && 'message' in result) notify(String((result as any).message))
+      const preferredId = result && typeof result === 'object' && 'hotspot' in result && Number.isFinite(Number((result as any).hotspot?.id)) ? Number((result as any).hotspot.id) : undefined
+      await refresh(true, preferredId)
       return true
-    }catch(err){notify(err instanceof Error?err.message:'Action failed','error');return false}
-    finally{setBusy(false)}
+    } catch (err) { notify(err instanceof Error ? err.message : 'Action failed', 'error'); return false }
+    finally { setBusy(false) }
   }
-  async function createReport(form:FormData){return runAction(()=>api.createReport(form).then(r=>{setSelectedId(r.hotspot.id);return r}), 'Report saved. Review its hotspot history and evidence.')}
-  async function attachReportEvidence(_hotspotId:number, reportId:number, form:FormData){await runAction(()=>api.attachReportEvidence(reportId,form), 'Evidence attached to the existing report. It is ready for supervisor review.')}
-  async function startTask(task:Task){await runAction(()=>api.startTask(task.id),`${task.code} moved to in progress.`)}
-  async function submitEvidence(task:Task,kind:'before'|'after',file:File){
-    const h=hotspots.find(x=>x.id===task.hotspot_id);if(!h){notify('Hotspot coordinates not available','error');return}
-    const f=new FormData();f.append('kind',kind);f.append('latitude',String(h.latitude));f.append('longitude',String(h.longitude));f.append('photo',file)
-    await runAction(()=>api.evidence(task.id,f),`${kind==='before'?'Before':'After'} evidence uploaded for ${task.code}.`)
+  async function createReport(form: FormData) { return runAction(() => api.createReport(form).then(r => { setSelectedId(r.hotspot.id); return r }), 'Report saved. Review its hotspot history and evidence.') }
+  async function attachReportEvidence(_hotspotId: number, reportId: number, form: FormData) { await runAction(() => api.attachReportEvidence(reportId, form), 'Evidence attached to the existing report. It is ready for supervisor review.') }
+  async function startTask(task: Task) { await runAction(() => api.startTask(task.id), `${task.code} moved to in progress.`) }
+  async function submitEvidence(task: Task, kind: 'before' | 'after', file: File) {
+    const h = hotspots.find(x => x.id === task.hotspot_id); if (!h) { notify('Hotspot coordinates not available', 'error'); return }
+    const f = new FormData(); f.append('kind', kind); f.append('latitude', String(h.latitude)); f.append('longitude', String(h.longitude)); f.append('photo', file)
+    await runAction(() => api.evidence(task.id, f), `${kind === 'before' ? 'Before' : 'After'} evidence uploaded for ${task.code}.`)
   }
-  async function finishTask(task:Task){await runAction(()=>api.finishTask(task.id),`${task.code} sent for human verification.`)}
-  async function verifyTask(task:Task,approved:boolean,notes?:string){
+  async function finishTask(task: Task) { await runAction(() => api.finishTask(task.id), `${task.code} sent for human verification.`) }
+  async function verifyTask(task: Task, approved: boolean, notes?: string) {
     const defaultNote = approved ? 'Evidence reviewed and accepted.' : 'Please retake clear after-photo and verify the location.'
     const reviewNote = notes?.trim() || defaultNote
-    await runAction(()=>api.verifyTask(task.id,approved,reviewNote),approved?'Cleanup verified. Follow-up was scheduled.':'Evidence rejected; task reopened for correction.')
+    await runAction(() => api.verifyTask(task.id, approved, reviewNote), approved ? 'Cleanup verified. Follow-up was scheduled.' : 'Evidence rejected; task reopened for correction.')
   }
 
-  if(!user)return <Login onLogin={login} loading={authLoading} error={authError} demoMode={demoMode}/>
-  const meta=pageCopy[page]
+  if (!user) return <Login onLogin={login} onRegister={register} onResetDemo={() => runAction(() => api.resetDemo(), 'Demo scenario reset to initial state.')} loading={authLoading} error={authError} demoMode={demoMode} />
+
+  const meta = (() => {
+    if (user.role === 'resident') {
+      return {
+        label: 'CITIZEN PORTAL',
+        title: page === 'hotspots' ? 'Community Hotspot Map' : 'My Reports & Clearance Progress',
+        desc: page === 'hotspots' ? 'View privacy-safe community waste locations and clean-up status.' : 'Follow the real progress of your submitted waste incident reports.'
+      }
+    }
+    if (user.role === 'worker') {
+      return {
+        label: 'FIELD OPERATIONS',
+        title: page === 'hotspots' ? 'Field Route Map' : 'My Assigned Collection Tasks',
+        desc: page === 'hotspots' ? 'Geographic view of your assigned tasks for route coordination.' : 'Record GPS before/after evidence photos and classify waste streams.'
+      }
+    }
+    if (user.role === 'receiver') {
+      return {
+        label: 'RECOVERY PARTNER',
+        title: 'Segregation & Material Handoffs',
+        desc: 'Confirm segregated waste intake and record verified quantities.'
+      }
+    }
+    return pageCopy[page] || pageCopy.overview
+  })()
+
   return <div className="app-shell rs-v05">
-    <aside className={`sidebar ${mobileNav?'sidebar-open':''}`}>
-      <div className="sidebar-brand"><div className="brand-symbol"><Recycle size={22}/></div><div><b>RecurScope</b><small>WASTE OPERATIONS</small></div><button className="mobile-close icon-btn" onClick={()=>setMobileNav(false)}><X size={18}/></button></div>
-      <div className="demo-chip">{summary?.synthetic_data?<><span className="pulse-dot"/> DEMO ENVIRONMENT <small>SIMULATED DATA</small></>:<><span className="live-dot" style={{marginRight:6}}/> OPERATIONAL PILOT <small>{pilot.name.toUpperCase()}</small></>}</div>
-      <div className="nav-section-label">WORKSPACE</div>
-      <nav className="main-nav">
-        <NavItem active={page==='overview'} icon={<Home size={18}/>} label="Recurrence workbench" onClick={()=>{setPage('overview');setMobileNav(false)}}/>
-        <NavItem active={page==='hotspots'} icon={<MapPinned size={18}/>} label="Hotspot map" count={hotspots.length} onClick={()=>{setPage('hotspots');setMobileNav(false)}}/>
-        <NavItem active={page==='reports'} icon={<Camera size={18}/>} label="Incident reports" count={reports.length} onClick={()=>{setPage('reports');setMobileNav(false)}}/>
-        <NavItem active={page==='tasks'} icon={<ClipboardCheck size={18}/>} label="Collection tasks" count={tasks.filter(t=>['ASSIGNED','IN_PROGRESS','AWAITING_VERIFICATION'].includes(t.status)).length} onClick={()=>{setPage('tasks');setMobileNav(false)}}/>
-      </nav>
-      <div className="nav-section-label">PREVENTION & RECOVERY</div>
-      <nav className="main-nav">
-        <NavItem active={page==='interventions'} icon={<Workflow size={18}/>} label="Intervention Ledger" count={interventions.filter(i=>i.status==='OPEN'||i.status==='IN_PROGRESS').length} onClick={()=>{setPage('interventions');setMobileNav(false)}}/>
-        <NavItem active={page==='recycling'} icon={<Recycle size={18}/>} label="Segregation & impact" onClick={()=>{setPage('recycling');setMobileNav(false)}}/>
-      </nav>
+    <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
+      <div className="sidebar-brand"><div className="brand-symbol"><Recycle size={22} /></div><div><b>RecurScope</b><small>WASTE OPERATIONS</small></div><button className="mobile-close icon-btn" onClick={() => setMobileNav(false)}><X size={18} /></button></div>
+      <div className="demo-chip">{summary?.synthetic_data ? <><span className="pulse-dot" /> DEMO ENVIRONMENT <small>SIMULATED DATA</small></> : <><span className="live-dot" style={{ marginRight: 6 }} /> OPERATIONAL PILOT <small>{pilot.name.toUpperCase()}</small></>}</div>
+
+      {user.role === 'resident' && (
+        <>
+          <div className="nav-section-label">MY COMMUNITY</div>
+          <nav className="main-nav">
+            <NavItem active={page === 'reports' || page === 'overview'} icon={<ClipboardCheck size={18} />} label="My reports & timeline" count={reports.length} onClick={() => { setPage('reports'); setMobileNav(false) }} />
+            <NavItem active={page === 'hotspots'} icon={<MapPinned size={18} />} label="Community hotspot map" count={hotspots.length} onClick={() => { setPage('hotspots'); setMobileNav(false) }} />
+          </nav>
+        </>
+      )}
+
+      {user.role === 'worker' && (
+        <>
+          <div className="nav-section-label">FIELD DISPATCH</div>
+          <nav className="main-nav">
+            <NavItem active={page === 'tasks' || page === 'overview'} icon={<ClipboardCheck size={18} />} label="My assigned tasks" count={tasks.filter(t => t.assigned_worker_id === user.id).length} onClick={() => { setPage('tasks'); setMobileNav(false) }} />
+            <NavItem active={page === 'hotspots'} icon={<MapPinned size={18} />} label="Task route map" onClick={() => { setPage('hotspots'); setMobileNav(false) }} />
+          </nav>
+        </>
+      )}
+
+      {user.role === 'receiver' && (
+        <>
+          <div className="nav-section-label">RECOVERY OPERATIONS</div>
+          <nav className="main-nav">
+            <NavItem active={page === 'recycling' || page === 'overview'} icon={<Recycle size={18} />} label="Material handoffs" count={handoffs.length} onClick={() => { setPage('recycling'); setMobileNav(false) }} />
+          </nav>
+        </>
+      )}
+
+      {user.role === 'admin' && (
+        <>
+          <div className="nav-section-label">SUPERVISOR WORKSPACE</div>
+          <nav className="main-nav">
+            <NavItem active={page === 'overview'} icon={<Home size={18} />} label="Recurrence workbench" onClick={() => { setPage('overview'); setMobileNav(false) }} />
+            <NavItem active={page === 'hotspots'} icon={<MapPinned size={18} />} label="Hotspot map" count={hotspots.length} onClick={() => { setPage('hotspots'); setMobileNav(false) }} />
+            <NavItem active={page === 'reports'} icon={<Camera size={18} />} label="Incident reports" count={reports.length} onClick={() => { setPage('reports'); setMobileNav(false) }} />
+            <NavItem active={page === 'tasks'} icon={<ClipboardCheck size={18} />} label="Collection tasks" count={tasks.filter(t => ['ASSIGNED', 'IN_PROGRESS', 'AWAITING_VERIFICATION'].includes(t.status)).length} onClick={() => { setPage('tasks'); setMobileNav(false) }} />
+          </nav>
+          <div className="nav-section-label">PREVENTION & RECOVERY</div>
+          <nav className="main-nav">
+            <NavItem active={page === 'interventions'} icon={<Workflow size={18} />} label="Intervention Ledger" count={interventions.filter(i => i.status === 'OPEN' || i.status === 'IN_PROGRESS').length} onClick={() => { setPage('interventions'); setMobileNav(false) }} />
+            <NavItem active={page === 'recycling'} icon={<Recycle size={18} />} label="Segregation & impact" onClick={() => { setPage('recycling'); setMobileNav(false) }} />
+          </nav>
+        </>
+      )}
+
       <div className="sidebar-bottom">
-        <div className="sidebar-help"><div className="help-icon"><ShieldCheck size={18}/></div><b>Evidence before closure</b><p>A closed task is not proof a hotspot stayed clean.</p></div>
-        <div className="user-card"><div className="avatar">{user.display_name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase()}</div><div className="user-card-copy"><b>{user.display_name}</b><small>{nice(user.role)}</small></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={17}/></button></div>
+        <div className="sidebar-help"><div className="help-icon"><ShieldCheck size={18} /></div><b>Evidence before closure</b><p>A closed task is not proof a hotspot stayed clean.</p></div>
+        <div className="user-card"><div className="avatar">{user.display_name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}</div><div className="user-card-copy"><b>{user.display_name}</b><small>{nice(user.role)}</small></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={17} /></button></div>
       </div>
     </aside>
     <main className="main-area">
-      <header className="topbar rs-topbar"><div className="topbar-left"><button className="mobile-menu icon-btn" onClick={()=>setMobileNav(true)}><Menu size={20}/></button><div className="crumbs"><span>RecurScope</span><span className="crumb-slash">/</span><b>{meta.label}</b></div></div><div className="topbar-actions"><div className="status-pill"><span className="live-dot"/> {summary?.synthetic_data?'Local demo connected':`Pilot active · ${pilot.name}`}</div><button className="icon-btn notification-btn" title="Refresh workspace" onClick={()=>void refresh(true)}><RefreshCw size={17}/></button>{user.role==='admin'&&<button className="btn btn-quiet btn-reset" onClick={()=>runAction(()=>api.resetDemo(),'Demo reset complete. Scenario restored.')} disabled={busy}><RefreshCw size={15}/> Reset demo</button>}</div></header>
+      <header className="topbar rs-topbar"><div className="topbar-left"><button className="mobile-menu icon-btn" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="crumbs"><span>RecurScope</span><span className="crumb-slash">/</span><b>{meta.label}</b></div></div><div className="topbar-actions"><div className="status-pill"><span className="live-dot" /> {summary?.synthetic_data ? 'Local demo connected' : `Pilot active · ${pilot.name}`}</div><button className="icon-btn notification-btn" title="Refresh workspace" onClick={() => void refresh(true)}><RefreshCw size={17} /></button>{(user.role === 'admin' || summary?.synthetic_data) && <button className="btn btn-quiet btn-reset" onClick={() => runAction(() => api.resetDemo(), 'Demo reset complete. Scenario restored.')} disabled={busy}><RefreshCw size={15} /> Reset demo</button>}</div></header>
       <div className="page-content">
-        <div className="page-heading rs-page-heading"><div><div className="eyebrow green">{meta.label}</div><h1>{meta.title}</h1><p>{meta.desc}</p></div><div className="heading-actions"><div className="last-updated"><span className="live-dot"/> Updates every minute</div><button className="btn btn-primary" onClick={()=>setReportOpen(true)}><Plus size={17}/> New report</button></div></div>
-        {summary?.synthetic_data?<div className="demo-banner"><div className="demo-banner-icon"><CircleHelp size={18}/></div><div><b>SIMULATED DATA MODE</b><span>Seeded sample records are for demonstration only. Do not present these as real municipal results.</span></div><button className="banner-close icon-btn" title="Dismiss" onClick={e=>{(e.currentTarget.parentElement as HTMLElement).style.display='none'}}><X size={16}/></button></div>:<div className="demo-banner pilot-banner"><div className="demo-banner-icon"><ShieldCheck size={18}/></div><div><b>PILOT AREA ACTIVE · {pilot.name.toUpperCase()}</b><span>Operating with live coordinates and evidence in {pilot.name} (Ward boundary: {pilot.default_ward}, {pilot.radius_km} km radius).</span></div></div>}
-        {page==='overview'&&<Overview summary={summary} hotspots={hotspots} tasks={tasks} interventions={interventions} followups={followups} selected={selected} selectedId={selectedId} passport={passport} user={user} pilot={pilot} onSelect={chooseHotspot} onNavigate={setPage} onOpenReport={()=>setReportOpen(true)} onConfirmRecurrence={(h,r)=>runAction(()=>api.confirmRecurrence(h,r,'Human reviewer confirmed a later evidence-backed incident after verified cleanup.'),'Post-cleanup recurrence confirmed.')} onRecordFollowup={(h,form)=>runAction(()=>api.recordFollowup(h,form),'Follow-up observation recorded.')} onCreateIntervention={(h,body)=>runAction(()=>api.createIntervention(h,body),'Preventive intervention created.')} onAttachReportEvidence={attachReportEvidence} busy={busy}/>}
-        {page==='hotspots'&&<HotspotsPage hotspots={filteredHotspots} allHotspots={hotspots} allCount={hotspots.length} selectedId={selectedId} selected={selected} passport={passport} search={search} statusFilter={filterStatus} wardFilter={filterWard} priorityFilter={filterPriority} ageFilter={filterAge} setSearch={setSearch} setStatusFilter={setFilterStatus} setWardFilter={setFilterWard} setPriorityFilter={setFilterPriority} setAgeFilter={setFilterAge} onSelect={chooseHotspot} user={user} pilot={pilot} onConfirmRecurrence={(h,r)=>runAction(()=>api.confirmRecurrence(h,r,'Human reviewer confirmed a later evidence-backed incident after verified cleanup.'),'Post-cleanup recurrence confirmed.')} onRecordFollowup={(h,form)=>runAction(()=>api.recordFollowup(h,form),'Follow-up observation recorded.')} onCreateIntervention={(h,body)=>runAction(()=>api.createIntervention(h,body),'Preventive intervention created.')} onAttachReportEvidence={attachReportEvidence} busy={busy}/>}
-        {page==='reports'&&<ReportsPage reports={reports} user={user} onSelectHotspot={(id)=>{chooseHotspot(id);setPage('hotspots')}} onOpenReport={()=>setReportOpen(true)}/>}
-        {page==='tasks'&&<TasksPage tasks={tasks} hotspots={hotspots} workers={workers} user={user} busy={busy} onCreate={(body)=>runAction(()=>api.createTask(body),'Collection task created.')} onUpdate={(id,body)=>runAction(()=>api.updateTask(id,body),'Task updated.')} onStart={startTask} onEvidence={submitEvidence} onFinish={finishTask} onVerify={verifyTask}/>}
-        {page==='interventions'&&<InterventionsPage interventions={interventions} hotspots={hotspots} followups={followups} user={user} busy={busy} onCreate={(h,body)=>runAction(()=>api.createIntervention(h,body),'Preventive intervention created.')} onUpdate={(id,body)=>runAction(()=>api.updateIntervention(id,body),'Intervention updated.')}/>}
-        {page==='recycling'&&<RecyclingPage handoffs={handoffs} tasks={tasks} summary={summary} user={user} busy={busy} onCreate={(body)=>runAction(()=>api.createHandoff(body),'Handoff record created.')} onUpdate={(id,body)=>runAction(()=>api.updateHandoff(id,body),'Handoff status updated.')}/>}
+        <div className="page-heading rs-page-heading">
+          <div><div className="eyebrow green">{meta.label}</div><h1>{meta.title}</h1><p>{meta.desc}</p></div>
+          <div className="heading-actions">
+            <div className="last-updated"><span className="live-dot" /> Updates every minute</div>
+            {user.role !== 'worker' && user.role !== 'receiver' && (
+              <button className="btn btn-primary" onClick={() => setReportOpen(true)}><Plus size={17} /> New report</button>
+            )}
+          </div>
+        </div>
+
+        {summary?.synthetic_data ? (
+          <div className="demo-banner">
+            <div className="demo-banner-icon"><CircleHelp size={18} /></div>
+            <div><b>SIMULATED DATA MODE</b><span>Seeded sample records are for demonstration only. Do not present these as real municipal results.</span></div>
+            <button className="banner-close icon-btn" title="Dismiss" onClick={e => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none' }}><X size={16} /></button>
+          </div>
+        ) : (
+          <div className="demo-banner pilot-banner">
+            <div className="demo-banner-icon"><ShieldCheck size={18} /></div>
+            <div><b>PILOT AREA ACTIVE · {pilot.name.toUpperCase()}</b><span>Operating with live coordinates and evidence in {pilot.name} (Ward boundary: {pilot.default_ward}, {pilot.radius_km} km radius).</span></div>
+          </div>
+        )}
+
+        {/* Dedicated Role-Based Experiences */}
+        {user.role === 'resident' && (
+          <CitizenPortal
+            reports={reports}
+            hotspots={hotspots}
+            user={user}
+            pilot={pilot}
+            onOpenReport={() => setReportOpen(true)}
+            onSelectHotspot={id => { chooseHotspot(id); setPage('hotspots') }}
+          />
+        )}
+
+        {user.role === 'worker' && (
+          <WorkerPortal
+            tasks={tasks}
+            hotspots={hotspots}
+            user={user}
+            pilot={pilot}
+            onStart={startTask}
+            onEvidence={submitEvidence}
+            onFinish={finishTask}
+            onUpdateStream={async (taskId, stream) => {
+              await runAction(() => api.updateTask(taskId, { stream }), 'Waste stream updated.')
+            }}
+            busy={busy}
+          />
+        )}
+
+        {user.role === 'receiver' && (
+          <RecyclingPage
+            handoffs={handoffs}
+            tasks={tasks}
+            summary={summary}
+            user={user}
+            busy={busy}
+            onCreate={body => runAction(() => api.createHandoff(body), 'Handoff record created.')}
+            onUpdate={(id, body) => runAction(() => api.updateHandoff(id, body), 'Handoff status updated.')}
+          />
+        )}
+
+        {user.role === 'admin' && (
+          <>
+            {page === 'overview' && <Overview summary={summary} hotspots={hotspots} tasks={tasks} interventions={interventions} followups={followups} selected={selected} selectedId={selectedId} passport={passport} user={user} pilot={pilot} onSelect={chooseHotspot} onNavigate={setPage} onOpenReport={() => setReportOpen(true)} onConfirmRecurrence={(h, r) => runAction(() => api.confirmRecurrence(h, r, 'Human reviewer confirmed a later evidence-backed incident after verified cleanup.'), 'Post-cleanup recurrence confirmed.')} onRecordFollowup={(h, form) => runAction(() => api.recordFollowup(h, form), 'Follow-up observation recorded.')} onCreateIntervention={(h, body) => runAction(() => api.createIntervention(h, body), 'Preventive intervention created.')} onAttachReportEvidence={attachReportEvidence} busy={busy} />}
+            {page === 'hotspots' && <HotspotsPage hotspots={filteredHotspots} allHotspots={hotspots} allCount={hotspots.length} selectedId={selectedId} selected={selected} passport={passport} search={search} statusFilter={filterStatus} wardFilter={filterWard} priorityFilter={filterPriority} ageFilter={filterAge} setSearch={setSearch} setStatusFilter={setFilterStatus} setWardFilter={setFilterWard} setPriorityFilter={setFilterPriority} setAgeFilter={setFilterAge} onSelect={chooseHotspot} user={user} pilot={pilot} onConfirmRecurrence={(h, r) => runAction(() => api.confirmRecurrence(h, r, 'Human reviewer confirmed a later evidence-backed incident after verified cleanup.'), 'Post-cleanup recurrence confirmed.')} onRecordFollowup={(h, form) => runAction(() => api.recordFollowup(h, form), 'Follow-up observation recorded.')} onCreateIntervention={(h, body) => runAction(() => api.createIntervention(h, body), 'Preventive intervention created.')} onAttachReportEvidence={attachReportEvidence} busy={busy} />}
+            {page === 'reports' && <ReportsPage reports={reports} user={user} onSelectHotspot={id => { chooseHotspot(id); setPage('hotspots') }} onOpenReport={() => setReportOpen(true)} />}
+            {page === 'tasks' && <TasksPage tasks={tasks} hotspots={hotspots} workers={workers} user={user} busy={busy} onCreate={body => runAction(() => api.createTask(body), 'Collection task created.')} onUpdate={(id, body) => runAction(() => api.updateTask(id, body), 'Task updated.')} onStart={startTask} onEvidence={submitEvidence} onFinish={finishTask} onVerify={verifyTask} />}
+            {page === 'interventions' && <InterventionsPage interventions={interventions} hotspots={hotspots} followups={followups} user={user} busy={busy} onCreate={(h, body) => runAction(() => api.createIntervention(h, body), 'Preventive intervention created.')} onUpdate={(id, body) => runAction(() => api.updateIntervention(id, body), 'Intervention updated.')} />}
+            {page === 'recycling' && <RecyclingPage handoffs={handoffs} tasks={tasks} summary={summary} user={user} busy={busy} onCreate={body => runAction(() => api.createHandoff(body), 'Handoff record created.')} onUpdate={(id, body) => runAction(() => api.updateHandoff(id, body), 'Handoff status updated.')} />}
+          </>
+        )}
+
         <footer className="app-footer"><span>RecurScope · SOCIAOTHON 2026 · PS 06</span><span>Operational priority rules · no unvalidated AI claims</span></footer>
       </div>
     </main>
-    {reportOpen&&<ReportModal hotspots={hotspots} selected={selected} pilot={pilot} onClose={()=>setReportOpen(false)} onSubmit={async form=>{const ok=await createReport(form);if(ok)setReportOpen(false)}} busy={busy}/>}
-    {toast&&<div className={`toast toast-${toast.kind}`}><span className="toast-icon">{toast.kind==='error'?<AlertTriangle size={18}/>:toast.kind==='info'?<Bell size={18}/>:<CheckCircle2 size={18}/>}</span><span>{toast.message}</span><button className="icon-btn" onClick={()=>setToast(null)}><X size={16}/></button></div>}
+    {reportOpen && <ReportModal hotspots={hotspots} selected={selected} pilot={pilot} onClose={() => setReportOpen(false)} onSubmit={async form => { const ok = await createReport(form); if (ok) setReportOpen(false) }} busy={busy} />}
+    {toast && <div className={`toast toast-${toast.kind}`}><span className="toast-icon">{toast.kind === 'error' ? <AlertTriangle size={18} /> : toast.kind === 'info' ? <Bell size={18} /> : <CheckCircle2 size={18} />}</span><span>{toast.message}</span><button className="icon-btn" onClick={() => setToast(null)}><X size={16} /></button></div>}
   </div>
 }
 
@@ -503,4 +658,472 @@ function ReportsPage({reports,user,onSelectHotspot,onOpenReport}:{reports:Report
       </table>
     </div>
   </div>
+}
+
+function TimelineModal({ reportId, onClose }: { reportId: number; onClose: () => void }) {
+  const [events, setEvents] = useState<ReportTimelineEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    api.reportTimeline(reportId)
+      .then(res => { if (active) setEvents(res) })
+      .catch(err => { if (active) setError(err instanceof Error ? err.message : 'Failed to load timeline') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [reportId])
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="timeline-modal-card" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="eyebrow green">AUDITABLE TIMELINE</div>
+            <h2>Incident #{reportId} Progress History</h2>
+            <p>Chronological records from citizen submission to supervisor resolution.</p>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={19} /></button>
+        </div>
+
+        <div className="timeline-modal-content">
+          {loading && <div style={{ padding: '20px', textAlign: 'center', color: '#668070' }}><Clock3 size={16} /> Loading incident history...</div>}
+          {error && <div style={{ padding: '12px', background: '#fdf2f2', border: '1px solid #f8c8c8', borderRadius: '8px', color: '#b93838' }}><AlertTriangle size={16} /> {error}</div>}
+          {!loading && !error && events.length === 0 && (
+            <Empty title="No timeline entries yet" text="Events will be recorded as tasks are dispatched, executed and reviewed." />
+          )}
+          {!loading && !error && events.length > 0 && (
+            <div className="timeline-list">
+              {events.map((ev, idx) => (
+                <div className="timeline-item" key={idx}>
+                  <span className="timeline-item-dot" />
+                  <div>
+                    <b>{nice(ev.event_type)}</b>
+                    <small>{ev.notes}</small>
+                    <em>{fmtTime(ev.created_at)} {ev.actor ? `· ${ev.actor}` : ''}</em>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function CitizenPortal({
+  reports,
+  hotspots,
+  user,
+  pilot,
+  onOpenReport,
+  onSelectHotspot,
+}: {
+  reports: Report[]
+  hotspots: Hotspot[]
+  user: User
+  pilot: PilotConfig
+  onOpenReport: () => void
+  onSelectHotspot: (id: number) => void
+}) {
+  const [activeTab, setActiveTab] = useState<'my_reports' | 'community_map'>('my_reports')
+  const [timelineReportId, setTimelineReportId] = useState<number | null>(null)
+
+  const STAGES = [
+    { key: 'SUBMITTED', label: '1. Submitted', num: 1 },
+    { key: 'ASSIGNED', label: '2. Assigned', num: 2 },
+    { key: 'IN_PROGRESS', label: '3. In Progress', num: 3 },
+    { key: 'AWAITING_VERIFICATION', label: '4. Under Review', num: 4 },
+    { key: 'VERIFIED', label: '5. Resolved', num: 5 },
+  ]
+
+  const getStageIdx = (stage?: string) => {
+    switch (stage) {
+      case 'SUBMITTED': return 0
+      case 'ASSIGNED': return 1
+      case 'IN_PROGRESS': return 2
+      case 'AWAITING_VERIFICATION': return 3
+      case 'VERIFIED':
+      case 'RECURRENCE_CONFIRMED':
+      case 'REJECTED': return 4
+      default: return 0
+    }
+  }
+
+  return (
+    <div className="citizen-portal">
+      <div className="section-toolbar">
+        <div className="filter-pills">
+          <button
+            className={activeTab === 'my_reports' ? 'filter-pill-active' : ''}
+            onClick={() => setActiveTab('my_reports')}
+          >
+            <ClipboardCheck size={15} /> My Reports & Progress ({reports.length})
+          </button>
+          <button
+            className={activeTab === 'community_map' ? 'filter-pill-active' : ''}
+            onClick={() => setActiveTab('community_map')}
+          >
+            <MapPinned size={15} /> Community Hotspots ({hotspots.length})
+          </button>
+        </div>
+        <button className="btn btn-primary" onClick={onOpenReport}>
+          <Plus size={16} /> Report waste issue
+        </button>
+      </div>
+
+      {activeTab === 'my_reports' && (
+        <div className="citizen-reports-grid">
+          {reports.map(report => {
+            const currentStageIdx = getStageIdx(report.lifecycle_stage)
+            const isResolved = report.lifecycle_stage === 'VERIFIED'
+            const isRecurrence = report.lifecycle_stage === 'RECURRENCE_CONFIRMED'
+            const isRejected = report.lifecycle_stage === 'REJECTED'
+
+            return (
+              <section className="panel citizen-report-card" key={report.id}>
+                <div className="citizen-report-head">
+                  <div>
+                    <span className="demo-role-badge">Report #{report.id}</span>
+                    <h3 style={{ margin: '6px 0 2px' }}>{nice(report.issue_type)}</h3>
+                    <p style={{ margin: 0, color: '#5b6f5d', fontSize: '13px' }}>{report.description || 'No description provided'}</p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <small style={{ color: '#889a85', display: 'block' }}>{fmtTime(report.created_at)}</small>
+                    <span style={{ fontSize: '12px', color: '#395c46' }}>{report.ward || pilot.default_ward}</span>
+                  </div>
+                </div>
+
+                <div className="lifecycle-tracker">
+                  {STAGES.map((s, idx) => {
+                    const isCompleted = idx < currentStageIdx || (idx === 4 && isResolved)
+                    const isCurrent = idx === currentStageIdx && !isResolved
+                    return (
+                      <div
+                        key={s.key}
+                        className={`lifecycle-step ${isCompleted ? 'completed' : isCurrent ? 'current' : ''}`}
+                      >
+                        <div className="lifecycle-dot">
+                          {isCompleted ? <Check size={12} /> : isRecurrence && idx === 4 ? <AlertTriangle size={12} /> : <span>{s.num}</span>}
+                        </div>
+                        <span className="lifecycle-step-label">
+                          {idx === 4 && isRecurrence ? 'Recurred' : idx === 4 && isRejected ? 'Reopened' : s.label}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="citizen-report-body">
+                  <div className="report-evidence-cell">
+                    {report.photo_key ? (
+                      <EvidenceThumb label="Incident photo" keyName={report.photo_key} />
+                    ) : (
+                      <span className="muted-text" style={{ fontSize: '12px' }}><Camera size={14} /> No photo attached</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                    {report.hotspot_id && (
+                      <button className="btn btn-secondary btn-small" onClick={() => onSelectHotspot(report.hotspot_id!)}>
+                        <MapPinned size={14} /> View Hotspot
+                      </button>
+                    )}
+                    <button className="btn btn-quiet btn-small" onClick={() => setTimelineReportId(report.id)}>
+                      <Activity size={14} /> View Timeline
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )
+          })}
+
+          {reports.length === 0 && (
+            <section className="panel">
+              <Empty
+                title="No reports submitted yet"
+                text="Notice an uncollected pile or chronic waste dumping in your neighbourhood? Submit a report with a pin and photo to start the cleanup workflow."
+              />
+            </section>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'community_map' && (
+        <div className="panel map-panel">
+          <div className="panel-header">
+            <div>
+              <h2>Community Waste Hotspots</h2>
+              <p>Privacy-safe public overview of monitored waste locations in {pilot.name}. Personal reporter identities remain hidden.</p>
+            </div>
+          </div>
+          <MapView hotspots={hotspots} selectedId={null} onSelect={onSelectHotspot} defaultCenter={[pilot.latitude, pilot.longitude]} />
+          <div className="map-bottom-row">
+            <span><b>{hotspots.length}</b> locations tracked</span>
+            <span>Coordinates verified within pilot boundary</span>
+          </div>
+        </div>
+      )}
+
+      {timelineReportId !== null && (
+        <TimelineModal reportId={timelineReportId} onClose={() => setTimelineReportId(null)} />
+      )}
+    </div>
+  )
+}
+
+function WorkerPortal({
+  tasks,
+  hotspots,
+  user,
+  pilot,
+  onStart,
+  onEvidence,
+  onFinish,
+  onUpdateStream,
+  busy,
+}: {
+  tasks: Task[]
+  hotspots: Hotspot[]
+  user: User
+  pilot: PilotConfig
+  onStart: (task: Task) => void
+  onEvidence: (task: Task, kind: 'before' | 'after', file: File) => void
+  onFinish: (task: Task) => void
+  onUpdateStream: (taskId: number, stream: string) => Promise<void>
+  busy: boolean
+}) {
+  const [filter, setFilter] = useState<'ACTIVE' | 'AWAITING_VERIFICATION' | 'ALL'>('ACTIVE')
+
+  const myTasks = useMemo(() => {
+    return tasks.filter(t => t.assigned_worker_id === user.id)
+  }, [tasks, user.id])
+
+  const visibleTasks = useMemo(() => {
+    if (filter === 'ACTIVE') {
+      return myTasks.filter(t => t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS')
+    }
+    if (filter === 'AWAITING_VERIFICATION') {
+      return myTasks.filter(t => t.status === 'AWAITING_VERIFICATION')
+    }
+    return myTasks
+  }, [myTasks, filter])
+
+  return (
+    <div className="worker-portal">
+      <div className="section-toolbar">
+        <div className="filter-pills">
+          <button className={filter === 'ACTIVE' ? 'filter-pill-active' : ''} onClick={() => setFilter('ACTIVE')}>
+            Active Assignments ({myTasks.filter(t => t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS').length})
+          </button>
+          <button className={filter === 'AWAITING_VERIFICATION' ? 'filter-pill-active' : ''} onClick={() => setFilter('AWAITING_VERIFICATION')}>
+            Under Review ({myTasks.filter(t => t.status === 'AWAITING_VERIFICATION').length})
+          </button>
+          <button className={filter === 'ALL' ? 'filter-pill-active' : ''} onClick={() => setFilter('ALL')}>
+            All My Tasks ({myTasks.length})
+          </button>
+        </div>
+      </div>
+
+      <div className="worker-tasks-list">
+        {visibleTasks.map(task => (
+          <WorkerTaskItem
+            key={task.id}
+            task={task}
+            hotspots={hotspots}
+            onStart={onStart}
+            onEvidence={onEvidence}
+            onFinish={onFinish}
+            onUpdateStream={onUpdateStream}
+            busy={busy}
+          />
+        ))}
+
+        {visibleTasks.length === 0 && (
+          <section className="panel">
+            <Empty
+              title="No tasks in this view"
+              text={filter === 'ACTIVE' ? "You have no active collection tasks right now. Great job!" : "No tasks matching this status."}
+            />
+          </section>
+        )}
+      </div>
+
+      <div className="workflow-note">
+        <ShieldCheck size={18} />
+        <div>
+          <b>Field Evidence Integrity Rule</b>
+          <span>Workers cannot approve their own tasks. A collection task requires both 'Before' and 'After' geo-tagged photos and waste stream classification before submission for supervisor verification.</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function WorkerTaskItem({
+  task,
+  hotspots,
+  onStart,
+  onEvidence,
+  onFinish,
+  onUpdateStream,
+  busy,
+}: {
+  task: Task
+  hotspots: Hotspot[]
+  onStart: (task: Task) => void
+  onEvidence: (task: Task, kind: 'before' | 'after', file: File) => void
+  onFinish: (task: Task) => void
+  onUpdateStream: (taskId: number, stream: string) => Promise<void>
+  busy: boolean
+}) {
+  const [kind, setKind] = useState<'before' | 'after'>(task.status === 'IN_PROGRESS' ? 'after' : 'before')
+  const [file, setFile] = useState<File | null>(null)
+  const [stream, setStream] = useState(task.stream || 'MIXED_UNKNOWN')
+
+  const isOverdue = new Date(task.due_at) < new Date() && task.status !== 'VERIFIED_RESOLVED'
+  const hasBothEvidence = Boolean(task.before_key && task.after_key)
+
+  return (
+    <section className={`panel worker-task-card ${isOverdue ? 'task-overdue' : ''}`}>
+      <div className="task-card-top">
+        <div className={`task-card-icon ${task.status.toLowerCase()}`}>
+          {task.status === 'AWAITING_VERIFICATION' ? <ShieldCheck size={20} /> : task.status === 'VERIFIED_RESOLVED' ? <CheckCircle2 size={20} /> : <Truck size={20} />}
+        </div>
+        <div className="task-title">
+          <div>
+            <b>{task.code} <span>· {task.hotspot_code}</span></b>
+            <StatusPill value={task.status} />
+          </div>
+          <h3>{task.hotspot_label}</h3>
+          <p>{task.ward} · {nice(task.stream)} stream</p>
+        </div>
+        <span className={isOverdue ? 'deadline overdue-text' : 'deadline'}>
+          <Clock3 size={14} /> {dueLabel(task.due_at)}
+        </span>
+      </div>
+
+      <div className="task-meta-grid">
+        <div>
+          <small>Assigned to</small>
+          <b>{task.assigned_worker}</b>
+        </div>
+        <div>
+          <small>Due date</small>
+          <b>{fmtTime(task.due_at)}</b>
+        </div>
+        <div>
+          <small>Evidence required</small>
+          <b className="evidence-count">
+            <span className={task.before_key ? 'evidence-ok' : ''}>{task.before_key ? '✓' : '○'} Before</span>
+            <span className={task.after_key ? 'evidence-ok' : ''}>{task.after_key ? '✓' : '○'} After</span>
+          </b>
+        </div>
+      </div>
+
+      {task.notes && (
+        <div className="task-notes">
+          <b>Supervisor Notes:</b> <p>{task.notes}</p>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#f5f9f3', padding: '10px 14px', borderRadius: '8px' }}>
+        <b style={{ fontSize: '12px', color: '#2a523c' }}>Waste stream:</b>
+        <select
+          value={stream}
+          disabled={task.status === 'VERIFIED_RESOLVED' || task.status === 'AWAITING_VERIFICATION' || busy}
+          onChange={async e => {
+            const val = e.target.value
+            setStream(val)
+            await onUpdateStream(task.id, val)
+          }}
+          style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #c9d8c4' }}
+        >
+          {STREAMS.map(s => (
+            <option key={s} value={s}>{nice(s)}</option>
+          ))}
+        </select>
+        <small style={{ color: '#7b917d' }}>Classify waste stream before completion</small>
+      </div>
+
+      <div className="evidence-previews">
+        <EvidenceThumb label="Before Evidence" keyName={task.before_key} />
+        <EvidenceThumb label="After Evidence" keyName={task.after_key} />
+      </div>
+
+      {task.status === 'ASSIGNED' && (
+        <div className="task-controls">
+          <button className="btn btn-primary btn-small" disabled={busy} onClick={() => onStart(task)}>
+            <ArrowRight size={15} /> Start Field Task
+          </button>
+          <span className="mini-muted">Take before-photo and mark in progress.</span>
+        </div>
+      )}
+
+      {(task.status === 'ASSIGNED' || task.status === 'IN_PROGRESS') && (
+        <div className="evidence-upload">
+          <div className="evidence-upload-head">
+            <div><Camera size={17} /><b>Capture GPS Evidence Photo</b></div>
+            <span>Coordinates are checked against hotspot location.</span>
+          </div>
+          <div className="evidence-form-row">
+            <select value={kind} onChange={e => setKind(e.target.value as 'before' | 'after')}>
+              <option value="before">Before photo {task.before_key ? '(Uploaded ✓)' : ''}</option>
+              <option value="after" disabled={task.status === 'ASSIGNED'}>After photo (start task first) {task.after_key ? '(Uploaded ✓)' : ''}</option>
+            </select>
+            <label className="file-pick">
+              <input type="file" accept="image/jpeg,image/png,image/webp" onChange={e => setFile(e.target.files?.[0] || null)} />
+              <Camera size={15} />{file ? file.name : 'Choose camera photo'}
+            </label>
+            <button
+              className="btn btn-secondary btn-small"
+              disabled={!file || busy}
+              onClick={() => {
+                if (file) {
+                  onEvidence(task, kind, file)
+                  setFile(null)
+                }
+              }}
+            >
+              Upload
+            </button>
+          </div>
+
+          {task.status === 'IN_PROGRESS' && (
+            <div className="task-controls" style={{ marginTop: '10px' }}>
+              <button
+                className="btn btn-primary btn-small"
+                disabled={!hasBothEvidence || busy}
+                onClick={() => onFinish(task)}
+              >
+                <FileCheck2 size={15} /> Submit for Supervisor Review
+              </button>
+              {!hasBothEvidence ? (
+                <span className="mini-muted" style={{ color: '#b96426' }}>Both Before & After photos are required before submission.</span>
+              ) : (
+                <span className="mini-muted">Submits completed task for supervisor verification.</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {task.status === 'AWAITING_VERIFICATION' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: '#fef7ec', border: '1px solid #f6dfbe', borderRadius: '8px', color: '#a56828', fontSize: '12px' }}>
+          <Clock3 size={16} />
+          <span><b>Awaiting Human Review:</b> Cleanup evidence has been submitted. An authorized supervisor must review and verify.</span>
+        </div>
+      )}
+
+      {task.status === 'VERIFIED_RESOLVED' && (
+        <div className="verified-note">
+          <CheckCircle2 size={16} />
+          <span>Verified by {task.reviewer || 'Supervisor'} on {fmtDate(task.verified_at)}. Great work!</span>
+        </div>
+      )}
+    </section>
+  )
 }

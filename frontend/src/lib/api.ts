@@ -1,4 +1,4 @@
-import type { User, Hotspot, Task, Passport, Summary, Intervention, Handoff, FollowUp, Report, PilotConfig } from './types'
+import type { User, Hotspot, Task, Passport, Summary, Intervention, Handoff, FollowUp, Report, PilotConfig, ReportTimelineEvent } from './types'
 
 const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
 const runtimeBase = (typeof window !== 'undefined' && (window as any).__RECURSCOPE_API_BASE__) || ''
@@ -35,9 +35,11 @@ export type HotspotCandidate = { id:number; code:string; label:string; ward:stri
 
 export const api = {
   login: (username: string, password: string) => request<{access_token:string; user:User}>('/api/auth/login', { method:'POST', body:JSON.stringify({username,password}) }),
+  register: (body: {username:string; password:string; display_name:string; ward?:string; consent:boolean}) => request<{access_token:string; user:User}>('/api/auth/register', { method:'POST', body:JSON.stringify(body) }),
   me: () => request<User>('/api/auth/me'),
   summary: () => request<Summary>('/api/summary'),
   hotspots: () => request<Hotspot[]>('/api/hotspots'),
+  publicHotspots: (ward?:string) => request<Array<{id:number;code:string;label:string;ward:string;latitude:number;longitude:number;status:string;recurrence_count:number;is_demo:boolean}>>(`/api/hotspots/public${ward ? `?ward=${encodeURIComponent(ward)}` : ''}`),
   hotspotCandidates: (lat:number,lng:number,radius=100) => request<HotspotCandidate[]>(`/api/hotspots/candidates?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}&radius_m=${encodeURIComponent(radius)}`),
   passport: (id:number) => request<Passport>(`/api/hotspots/${id}/passport`),
   tasks: () => request<Task[]>('/api/tasks'),
@@ -67,6 +69,7 @@ export const api = {
     const qs=q.toString();
     return request<Report[]>(`/api/reports${qs?`?${qs}`:''}`)
   },
+  reportTimeline: (reportId:number) => request<ReportTimelineEvent[]>(`/api/reports/${reportId}/timeline`),
   getPilotConfig: () => request<PilotConfig>('/api/config/pilot'),
   updatePilotConfig: (body:Partial<PilotConfig>) => request<PilotConfig>('/api/config/pilot', {method:'PATCH',body:JSON.stringify(body)}),
   analytics: () => request<any>('/api/analytics/ward'),

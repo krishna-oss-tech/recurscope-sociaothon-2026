@@ -127,3 +127,60 @@ html{scroll-behavior:smooth}body{background:var(--canvas)}button,input,select,te
 /* Evidence repair action: compact, accessible and visually consistent with the operations console. */
 .evidence-upload-control{display:inline-flex;flex-direction:column;align-items:flex-start;gap:5px;max-width:100%}.evidence-upload-label{cursor:pointer;white-space:nowrap}.evidence-upload-label input{display:none}.return-alert-actions{display:flex;justify-content:flex-end;flex-shrink:0}.return-alert-actions .btn{white-space:nowrap}.return-alert-inline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.report-evidence-cell{display:inline-block;min-width:110px}.reports-table td:last-child{min-width:132px}.evidence-upload-control .file-error{display:block;font-size:10px}
 .pilot-boundary-alert{display:flex;align-items:flex-start;gap:8px;padding:9px 12px;background:#fff8ee;border:1px solid #f6deb6;border-radius:8px;color:#a56828;font-size:10px;line-height:1.45;margin-bottom:11px}.pilot-boundary-alert svg{flex-shrink:0;margin-top:2px}.pilot-banner{background:#e8f4ec;border-color:#c8e5d2;color:#286348}.pilot-banner b{color:#1e5b3f}.reports-page{display:grid;gap:16px}.reports-page-table td{vertical-align:middle}.report-desc-preview{margin:3px 0 0;font-size:10px;color:#7a8f85;line-height:1.4;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.precision-pill{display:inline-block;margin-top:4px;padding:2px 6px;border-radius:4px;background:#f0f5f2;color:#678275;font-size:9px;text-transform:uppercase}.demo-tag-mini{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;background:#fef3e2;color:#b26b23;font-size:9px}
+
+/* Entry Mode Selector & Role Cards */
+.entry-mode-tabs{display:flex;gap:6px;background:#eef3ea;padding:5px;border-radius:10px;margin-bottom:20px;border:1px solid #dce4d6}
+.entry-mode-tab{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;padding:9px 14px;border:none;border-radius:7px;background:transparent;color:#617260;font:600 12px 'Space Grotesk',sans-serif;cursor:pointer;transition:all .18s}
+.entry-mode-tab:hover{color:#2a4434}
+.entry-mode-tab.active{background:#fff;color:#1e3f2d;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.demo-role-cards{display:grid;grid-template-columns:1fr;gap:10px;margin:16px 0 20px}
+.demo-role-card{border:1px solid #dbe6d7;background:#fff;border-radius:10px;padding:13px;display:grid;gap:8px;transition:border-color .18s,transform .18s}
+.demo-role-card:hover{border-color:#8cae87;transform:translateY(-1px)}
+.demo-role-card-top{display:flex;align-items:center;gap:10px}
+.demo-role-meta{display:flex;align-items:center;justify-content:space-between;flex:1}
+.demo-role-meta>b{font:700 13px 'Space Grotesk',sans-serif;color:#244431}
+.demo-role-badge{font:600 9px 'IBM Plex Mono',monospace;color:#6d8869;background:#eef5eb;padding:2px 7px;border-radius:5px;text-transform:uppercase}
+.demo-role-desc{margin:0;font:400 11px/1.45 'DM Sans',sans-serif;color:#5a6e59}
+.demo-launch-btn{display:inline-flex;align-items:center;justify-content:space-between;width:100%;padding:7px 12px;margin-top:2px}
+.demo-footer-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:12px;border-top:1px solid #e2ebd0;font-size:11px}
+.operational-subtabs{display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid #e1e9dc;padding-bottom:10px}
+.op-subtab{display:inline-flex;align-items:center;gap:6px;border:1px solid #d4e0ce;background:#f7faf4;padding:6px 12px;border-radius:7px;font:600 11px 'Space Grotesk',sans-serif;color:#596d57;cursor:pointer}
+.op-subtab.active{background:#2a573f;color:#fff;border-color:#2a573f}
+
+/* Citizen Experience Styles */
+.citizen-portal{display:grid;gap:20px}
+.citizen-reports-grid{display:grid;gap:14px}
+.citizen-report-card{background:#fff;border:1px solid #dae5d6;border-radius:12px;padding:18px;display:grid;gap:14px;box-shadow:0 1px 4px rgba(0,0,0,.03)}
+.citizen-report-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.citizen-report-meta{display:flex;align-items:center;gap:9px}
+.citizen-report-body{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start}
+@media(max-width:680px){.citizen-report-body{grid-template-columns:1fr}}
+
+/* 5-Step Lifecycle Progress Tracker */
+.lifecycle-tracker{display:flex;align-items:center;position:relative;margin:10px 0 6px;padding:12px 14px;background:#f6f9f3;border-radius:9px;border:1px solid #e2ebd0}
+.lifecycle-step{display:flex;flex-direction:column;align-items:center;flex:1;position:relative;z-index:2;text-align:center}
+.lifecycle-dot{width:22px;height:22px;border-radius:50%;background:#e3ebe0;color:#7e937d;display:grid;place-items:center;font-size:10px;font-weight:700;margin-bottom:5px;transition:all .2s}
+.lifecycle-step.completed .lifecycle-dot{background:#2b6849;color:#fff}
+.lifecycle-step.current .lifecycle-dot{background:#419567;color:#fff;box-shadow:0 0 0 3px rgba(65,149,103,.25)}
+.lifecycle-step-label{font:600 10px 'Space Grotesk',sans-serif;color:#718570}
+.lifecycle-step.completed .lifecycle-step-label{color:#2a563d}
+.lifecycle-step.current .lifecycle-step-label{color:#1e432f;font-weight:700}
+.lifecycle-bar{position:absolute;top:22px;left:40px;right:40px;height:3px;background:#dce6d6;z-index:1}
+.lifecycle-bar-fill{height:100%;background:#2b6849;transition:width .3s}
+
+/* Worker Experience Styles */
+.worker-portal{display:grid;gap:20px}
+.worker-tasks-list{display:grid;gap:14px}
+.worker-task-card{background:#fff;border:1px solid #dae5d6;border-radius:12px;padding:18px;display:grid;gap:14px;box-shadow:0 1px 4px rgba(0,0,0,.03)}
+.worker-task-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.worker-task-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.worker-action-box{background:#f8faf6;border:1px solid #dfe7da;border-radius:9px;padding:14px;display:grid;gap:10px}
+.worker-photo-slots{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:550px){.worker-photo-slots{grid-template-columns:1fr}}
+
+/* Timeline Modal */
+.timeline-modal{position:fixed;inset:0;background:rgba(20,35,27,.6);display:grid;place-items:center;z-index:1000;padding:16px}
+.timeline-modal-card{background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:85vh;overflow-y:auto;display:grid;gap:16px;padding:24px;box-shadow:0 12px 36px rgba(0,0,0,.2)}
+.timeline-list{display:grid;gap:14px;border-left:2px solid #dae4d5;margin-left:10px;padding-left:16px}
+.timeline-item{position:relative;display:grid;gap:4px}
+.timeline-item-dot{position:absolute;left:-23px;top:3px;width:12px;height:12px;border-radius:50%;background:#3e7855;border:2px solid #fff}

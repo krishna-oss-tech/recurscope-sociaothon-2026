@@ -8,7 +8,7 @@ export type Hotspot = {
 }
 export type Report = {
   id: number; hotspot_id: number; hotspot_code: string | null; ward?: string | null; issue_type: string; description: string; latitude: number; longitude: number;
-  gps_accuracy_m: number | null; location_precision: string; outside_pilot_area?: boolean; photo_key: string | null; verification_state: string; is_demo: boolean; created_at: string
+  gps_accuracy_m: number | null; location_precision: string; outside_pilot_area?: boolean; photo_key: string | null; verification_state: string; lifecycle_stage?: string; is_demo: boolean; created_at: string
 }
 export type Task = {
   id: number; code: string; hotspot_id: number; hotspot_code: string; hotspot_label: string; ward: string; assigned_worker_id: number | null;
@@ -22,3 +22,5 @@ export type FollowUp = { id: number; hotspot_id: number; hotspot_code?: string; 
 export type Handoff = { id: number; task_id: number; task_code: string; hotspot_code: string; stream: string; receiver_name: string; quantity: number | null; unit: string; status: string; notes: string; received_at: string | null; is_demo: boolean; created_at: string }
 export type Passport = { hotspot: Hotspot; reports: Report[]; tasks: Task[]; events: Event[]; interventions: Intervention[]; followups: FollowUp[]; possible_return_reports: Report[] }
 export type Summary = { synthetic_data: boolean; hotspots: number; reports: number; active_tasks: number; overdue_tasks: number; confirmed_recurrence_hotspots: number; recurrence_rate_percent: number | null; recurrence_numerator: number; recurrence_denominator: number; median_clearance_hours: number | null; verified_task_count: number; task_count: number; handoff_completed: number; handoff_total: number; note: string }
+export type PublicHotspot = { id: number; code: string; label: string; ward: string; latitude: number; longitude: number; status: string; recurrence_count: number; first_seen_at: string | null; last_seen_at: string | null; last_verified_cleanup_at: string | null; is_demo: boolean }
+export type ReportTimelineEvent = { id: number; event_type: string; notes: string; actor: string; report_id?: number | null; task_id?: number | null; evidence_key: string | null; latitude?: number | null; longitude?: number | null; is_demo: boolean; created_at: string }
