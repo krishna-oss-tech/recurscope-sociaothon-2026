@@ -8,7 +8,7 @@ import {
 import Login from './components/Login'
 import MapView from './components/MapView'
 import LocationPicker from './components/LocationPicker'
-import { api, getToken, setToken, API_BASE, type HotspotCandidate } from './lib/api'
+import { api, getToken, setToken, clearToken, setActiveMode, getActiveMode, evidenceUrl, type HotspotCandidate } from './lib/api'
 import type { User, Hotspot, Task, Passport, Summary, Intervention, Handoff, FollowUp, Report, PilotConfig, ReportTimelineEvent } from './lib/types'
 import './styles.css'
 
@@ -80,8 +80,9 @@ export default function App(){
   const login = async (username: string, password: string, isDemo = false) => {
     setAuthLoading(true); setAuthError('')
     try {
-      const response = await api.login(username, password)
-      setToken(response.access_token)
+      setActiveMode(isDemo ? 'demo' : 'operational')
+      const response = await api.login(username, password, isDemo)
+      setToken(response.access_token, isDemo ? 'demo' : 'operational')
       setUser(response.user)
       setDemoMode(isDemo)
       if (response.user.role === 'worker') setPage('tasks')
@@ -99,8 +100,9 @@ export default function App(){
   const register = async (data: { username: string; password: string; display_name: string; ward?: string; consent: boolean }) => {
     setAuthLoading(true); setAuthError('')
     try {
+      setActiveMode('operational')
       const response = await api.register(data)
-      setToken(response.access_token)
+      setToken(response.access_token, 'operational')
       setUser(response.user)
       setDemoMode(false)
       setPage('reports')
@@ -112,11 +114,13 @@ export default function App(){
     }
   }
 
-  const logout = () => { setToken(''); setUser(null); setPassport(null); setToast(null) }
+  const logout = () => { clearToken(); setUser(null); setPassport(null); setToast(null) }
   useEffect(() => {
-    api.health().then(h => setDemoMode(Boolean(h.demo_mode))).catch(() => setDemoMode(false))
-    if (!getToken()) return;
-    api.me().then(setUser).catch(() => { setToken(''); setUser(null) })
+    const mode = getActiveMode()
+    api.health(mode).then(h => setDemoMode(Boolean(h.demo_mode))).catch(() => setDemoMode(mode === 'demo'))
+    const token = getToken(mode)
+    if (!token) return
+    api.me(mode).then(setUser).catch(() => { clearToken(mode); setUser(null) })
   }, [])
   useEffect(() => { if (user) void refresh(false) }, [user])
   useEffect(() => { if (!user) return; const timer = window.setInterval(() => void refresh(true), 60000); return () => window.clearInterval(timer) }, [user, refresh])
@@ -481,7 +485,9 @@ function EvidenceThumb({label,keyName}:{label:string;keyName:string|null}){
  useEffect(()=>{
    let objectUrl:string|undefined;let cancelled=false
    if(!keyName||!keyName.endsWith('.jpg')){setUrl(null);return ()=>{cancelled=true}}
-   fetch(`${API_BASE}/api/evidence/${keyName}`,{headers:{Authorization:`Bearer ${getToken()}`}})
+   const endpoint = evidenceUrl(keyName)
+   if(!endpoint){setUrl(null);return ()=>{cancelled=true}}
+   fetch(endpoint,{headers:{Authorization:`Bearer ${getToken()}`}})
      .then(r=>{if(!r.ok)throw new Error('Evidence unavailable');return r.blob()})
      .then(blob=>{if(!cancelled){objectUrl=URL.createObjectURL(blob);setUrl(objectUrl)}})
      .catch(()=>{if(!cancelled)setUrl(null)})

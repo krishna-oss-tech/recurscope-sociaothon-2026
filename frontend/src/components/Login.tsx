@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Recycle, ShieldCheck, MapPinned, ClipboardCheck, ArrowRight, UserPlus, LogIn, Sparkles, RefreshCw, UserCheck } from 'lucide-react'
+import { Recycle, ShieldCheck, MapPinned, ClipboardCheck, ArrowRight, UserPlus, LogIn, Sparkles, RefreshCw, UserCheck, AlertTriangle } from 'lucide-react'
+import { isDemoConfigured, getDemoBase } from '../lib/api'
 
 type Props = {
   onLogin: (username: string, password: string, isDemo?: boolean) => Promise<void>
@@ -129,9 +130,34 @@ export default function Login({ onLogin, onRegister, onResetDemo, loading, error
               <p>Select any role below to experience its dedicated interface using isolated synthetic demonstration records.</p>
             </div>
 
+            {!isDemoConfigured() ? (
+              <div className="demo-config-warning">
+                <div className="warning-head">
+                  <AlertTriangle size={18} />
+                  <b>Demo service configuration is incomplete</b>
+                </div>
+                <p>
+                  An isolated demo backend has not been configured (missing <code>VITE_DEMO_API_BASE_URL</code>).
+                  To prevent contaminating production records, demo mode requires a separate isolated backend service.
+                </p>
+                <div className="warning-action">
+                  <span>Please use <b>Operational Login</b> for authenticated pilot access.</span>
+                  <button type="button" className="btn btn-secondary btn-small" onClick={() => setEntryMode('operational')}>
+                    Go to Operational Login
+                  </button>
+                </div>
+              </div>
+            ) : (
+              getDemoBase() && (
+                <div className="demo-connected-chip">
+                  <span className="pulse-dot" /> Connected to isolated demo service
+                </div>
+              )
+            )}
+
             <div className="demo-role-cards">
               {demoAccounts.map(account => (
-                <div className="demo-role-card" key={account.username}>
+                <div className={`demo-role-card ${!isDemoConfigured() ? 'demo-disabled' : ''}`} key={account.username}>
                   <div className="demo-role-card-top">
                     <span className={`role-dot ${account.color}`} />
                     <div className="demo-role-meta">
@@ -143,7 +169,8 @@ export default function Login({ onLogin, onRegister, onResetDemo, loading, error
                   <button
                     type="button"
                     className="btn btn-secondary btn-small demo-launch-btn"
-                    disabled={loading}
+                    disabled={loading || !isDemoConfigured()}
+                    title={!isDemoConfigured() ? 'Demo service configuration is incomplete' : `Launch as ${account.role.split(' ')[0]}`}
                     onClick={() => void onLogin(account.username, account.password, true)}
                   >
                     <span>Launch as {account.role.split(' ')[0]}</span>
@@ -159,8 +186,8 @@ export default function Login({ onLogin, onRegister, onResetDemo, loading, error
                   type="button"
                   className="btn btn-quiet btn-small"
                   onClick={() => void onResetDemo()}
-                  disabled={loading}
-                  title="Restore clean initial demo state"
+                  disabled={loading || !isDemoConfigured()}
+                  title={!isDemoConfigured() ? 'Demo service is not configured' : 'Restore clean initial demo state'}
                 >
                   <RefreshCw size={14} /> Reset Demo Data
                 </button>
