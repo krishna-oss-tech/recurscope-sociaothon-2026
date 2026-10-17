@@ -85,36 +85,66 @@
 
 ---
 
-## 4. Recommended Deployment Paths
+## 4. Chosen Production Architecture: Vercel Frontend + Render Backend
 
-### Option A: Render + Vercel / Netlify (Simplest Free/Low-Cost Hackathon Stack)
+This is the primary production architecture for RecurScope. It provides independent scaling, durable persistent disk storage for before/after photos, and strict separation between the client and API tiers.
 
-1. **Database & API (Render)**:
-   - Create a **PostgreSQL Database** on Render (or Supabase/Neon).
-   - Create a **Web Service** on Render from the repository root:
-     - Root Directory: `backend`
-     - Build Command: `pip install -r requirements.txt -r requirements-postgres.txt`
-     - Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-     - Health Check Path: `/health`
-     - Add Persistent Disk: Mount `/app/storage/evidence` (1 GB).
-     - Environment Variables:
-       - `ENVIRONMENT=production`
-       - `DATABASE_URL=<your-render-postgres-connection-string>`
-       - `SECRET_KEY=<32-byte-hex-random>`
-       - `CORS_ORIGINS=https://<your-frontend-project>.vercel.app`
-       - `ALLOW_DEMO_RESET=false`
-2. **Frontend (Vercel or Netlify)**:
-   - Root Directory: `frontend`
-   - Framework Preset: `Vite`
-   - Build Command: `npm run build`
-   - Output Directory: `dist`
-   - Environment Variable:
-     - `VITE_API_BASE_URL=https://<your-render-api-subdomain>.onrender.com`
-3. **Verification**:
-   - Visit `https://<your-render-api-subdomain>.onrender.com/health` (should return `"ok": true, "database": "connected"`).
-   - Visit your frontend URL, log in with `admin` / `admin123`, and verify the overview, hotspot passport, and task workflows.
+### Step 1: Deploy Backend & Database on Render
 
----
+1. **Provision Managed PostgreSQL**:
+   - Create a **PostgreSQL Database** on Render (or Supabase / Neon / AWS RDS).
+   - Copy the internal or external connection string (format: `postgresql://user:password@host:5432/dbname`).
+2. **Create Web Service**:
+   - In Render, create a **Web Service** pointing to your GitHub repository.
+   - **Root Directory**: `backend`
+   - **Runtime**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt -r requirements-postgres.txt`
+   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - **Health Check Path**: `/health` (or `/api/health`)
+3. **Attach Persistent Storage**:
+   - Under **Disks**, add a persistent volume:
+     - **Name**: `recurscope-evidence`
+     - **Mount Path**: `/app/storage/evidence`
+     - **Size**: 1 GB or larger
+4. **Configure Backend Environment Variables**:
+   ```env
+   ENVIRONMENT=production
+   DATABASE_URL=postgresql+psycopg://user:password@host:5432/dbname
+   SECRET_KEY=<32-byte-hex-random>
+   INITIAL_ADMIN_USERNAME=admin
+   INITIAL_ADMIN_PASSWORD=<secure-admin-password>
+   EVIDENCE_DIR=/app/storage/evidence
+   ALLOW_DEMO_RESET=false
+   CORS_ORIGINS=https://<your-vercel-domain>.vercel.app
+   CORS_ORIGIN_REGEX=^https:\/\/.*\.vercel\.app$
+   ```
+
+### Step 2: Deploy Frontend on Vercel
+
+1. **Import Project**:
+   - In Vercel, import your GitHub repository.
+   - Set **Root Directory** to `frontend` (or click **Import single project** next to `frontend`).
+   - **Framework Preset**: `Vite` (auto-detected).
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+2. **Configure Frontend Environment Variable**:
+   ```env
+   VITE_API_BASE_URL=https://<your-render-service>.onrender.com
+   ```
+   > [!IMPORTANT]
+   > The frontend requires `VITE_API_BASE_URL` in production builds. The client build never silently falls back to `localhost` when deployed on a remote domain.
+3. **Routing**:
+   - Handled via [`frontend/vercel.json`](file:///d:/RecurScope_MVP_v0.5/RecurScope_MVP_v0.5/frontend/vercel.json) rewrite rule `/(.*) -> /index.html` for clean client-side SPA routing.
+
+### Step 3: Verification Checklist
+
+1. Visit `https://<your-render-service>.onrender.com/health`:
+   - Returns status: `{"ok": true, "service": "recurscope-api", "version": "0.5.0", "database": "connected", "environment": "production", "demo_mode": false}`.
+2. Visit `https://<your-vercel-domain>.vercel.app`:
+   - Login page renders in **Operational Pilot** mode without demo quick-access buttons.
+   - Pre-filled demo credentials are absent.
+   - Log in using your configured `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD`.
+   - Admin can securely provision pilot field workers and residents via the API.
 
 ### Option B: Single Host / VPS via Docker Compose
 

@@ -2,7 +2,20 @@ import type { User, Hotspot, Task, Passport, Summary, Intervention, Handoff, Fol
 
 const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
 const runtimeBase = (typeof window !== 'undefined' && (window as any).__RECURSCOPE_API_BASE__) || ''
-export const API_BASE = (envBase || runtimeBase || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1' ? '' : 'http://127.0.0.1:8018')).replace(/\/$/, '')
+
+function getApiBase(): string {
+  if (envBase) return envBase.replace(/\/$/, '')
+  if (runtimeBase) return runtimeBase.replace(/\/$/, '')
+  // Production builds must never silently fall back to localhost
+  if (import.meta.env.PROD) {
+    return ''
+  }
+  // Local development mode fallback only
+  const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  return isLocal ? 'http://127.0.0.1:8018' : ''
+}
+
+export const API_BASE = getApiBase()
 let authToken = localStorage.getItem('recurscope_token') || ''
 export function setToken(token: string) { authToken = token; if (token) localStorage.setItem('recurscope_token', token); else localStorage.removeItem('recurscope_token') }
 export function getToken() { return authToken }
