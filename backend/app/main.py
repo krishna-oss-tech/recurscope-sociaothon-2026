@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from .database import Base, engine, get_db, SessionLocal
 from .models import User, Hotspot, Report, Task, HotspotEvent, Intervention, FollowUp, Handoff, AuditLog, AppSetting
 from .schemas import (LoginRequest, TaskCreate, TaskUpdate, FollowUpCreate, InterventionCreate,
-                      InterventionUpdate, HandoffCreate, HandoffUpdate, RecurrenceConfirm, AssociateReport, UserCreate)
+                      InterventionUpdate, HandoffCreate, HandoffUpdate, RecurrenceConfirm, AssociateReport, UserCreate,
+                      RegisterRequest)
 from .security import verify_password, create_access_token, get_current_user, allow_roles, hash_password
 from .logic import utcnow, as_naive_utc, distance_m, add_event, score_hotspot
 from .seed import seed_demo, bootstrap_admin
@@ -223,14 +224,35 @@ def _hotspot_dict(db: Session, h: Hotspot) -> dict:
     }
 
 
-def _report_dict(r: Report, hotspot: Hotspot | None = None) -> dict:
+def _report_lifecycle_stage(db: Session | None, r: Report) -> str:
+    if r.verification_state == "RECURRENCE_CONFIRMED":
+        return "RECURRENCE_CONFIRMED"
+    if db:
+        latest_task = db.query(Task).filter(Task.hotspot_id == r.hotspot_id).order_by(Task.created_at.desc()).first()
+        if latest_task:
+            if latest_task.status == "VERIFIED_RESOLVED" and latest_task.verified_at and latest_task.verified_at >= r.created_at:
+                return "VERIFIED"
+            if latest_task.status == "AWAITING_VERIFICATION":
+                return "AWAITING_VERIFICATION"
+            if latest_task.status == "IN_PROGRESS":
+                return "IN_PROGRESS"
+            if latest_task.status == "ASSIGNED":
+                return "ASSIGNED"
+            if latest_task.status == "REJECTED":
+                return "REJECTED"
+    return "SUBMITTED"
+
+
+def _report_dict(r: Report, hotspot: Hotspot | None = None, db: Session | None = None) -> dict:
+    stage = _report_lifecycle_stage(db, r)
     return {"id": r.id, "hotspot_id": r.hotspot_id, "hotspot_code": hotspot.code if hotspot else None,
             "ward": hotspot.ward if hotspot else None,
             "issue_type": r.issue_type, "description": r.description, "latitude": r.latitude, "longitude": r.longitude,
             "gps_accuracy_m": r.gps_accuracy_m, "location_precision": r.location_precision,
             "outside_pilot_area": "outside_pilot" in (r.location_precision or ""),
-            "photo_key": r.photo_key, "verification_state": r.verification_state, "is_demo": r.is_demo,
-            "created_at": r.created_at.isoformat() if r.created_at else None}
+            "photo_key": r.photo_key, "verification_state": r.verification_state, "lifecycle_stage": stage,
+            "is_demo": r.is_demo, "created_at": r.created_at.isoformat() if r.created_at else None}
+
 
 
 def _task_dict(db: Session, t: Task) -> dict:
@@ -358,6 +380,31 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     user = db.query(User).filter(User.username == payload.username.strip()).first()
     if not user or not user.active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "Incorrect username or password")
+    return {"access_token": create_access_token(user), "token_type": "bearer", "user": _user_dict(user)}
+
+
+@app.post("/api/auth/register")
+def register_resident(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = get_client_ip(request)
+    login_limiter.check(client_ip, action="citizen registration")
+    if not payload.consent:
+        raise HTTPException(422, "Explicit consent to participate in waste reporting and share incident coordinates is required.")
+    clean_username = payload.username.strip().lower()
+    existing = db.query(User).filter(func.lower(User.username) == clean_username).first()
+    if existing:
+        raise HTTPException(409, "A user with this username already exists. Please choose a different username.")
+    user = User(
+        username=clean_username,
+        display_name=payload.display_name.strip(),
+        role="resident",  # STRICT: Public citizen registration can ONLY create resident accounts
+        password_hash=hash_password(payload.password),
+        active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    _audit(db, user.id, "RESIDENT_REGISTERED", "user", user.id, f"Resident self-registered in ward {payload.ward or 'unassigned'}")
+    db.commit()
     return {"access_token": create_access_token(user), "token_type": "bearer", "user": _user_dict(user)}
 
 
@@ -501,6 +548,28 @@ def hotspot_candidates(lat: float, lng: float, radius_m: float = Query(default=H
     return sorted(results, key=lambda x: x["distance_m"])
 
 
+@app.get("/api/hotspots/public")
+def list_public_hotspots(ward: str | None = None, db: Session = Depends(get_db)):
+    query = db.query(Hotspot)
+    if ward:
+        query = query.filter(Hotspot.ward == ward)
+    hotspots = query.order_by(Hotspot.last_seen_at.desc()).all()
+    return [{
+        "id": h.id,
+        "code": h.code,
+        "label": h.label,
+        "ward": h.ward,
+        "latitude": h.latitude,
+        "longitude": h.longitude,
+        "status": h.status,
+        "recurrence_count": h.recurrence_count,
+        "first_seen_at": h.first_seen_at.isoformat() if h.first_seen_at else None,
+        "last_seen_at": h.last_seen_at.isoformat() if h.last_seen_at else None,
+        "last_verified_cleanup_at": h.last_verified_cleanup_at.isoformat() if h.last_verified_cleanup_at else None,
+        "is_demo": getattr(h, "is_demo", False),
+    } for h in hotspots]
+
+
 @app.get("/api/hotspots")
 def list_hotspots(ward: str | None = None, status: str | None = None, priority: str | None = None,
                   db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -530,10 +599,10 @@ def hotspot_passport(hotspot_id: int, db: Session = Depends(get_db), user: User 
     interventions = db.query(Intervention).filter(Intervention.hotspot_id == hotspot_id).order_by(Intervention.created_at.desc()).all()
     followups = db.query(FollowUp).filter(FollowUp.hotspot_id == hotspot_id).order_by(FollowUp.scheduled_at).all()
     possible = [r for r in reports if hotspot.last_verified_cleanup_at and r.created_at > hotspot.last_verified_cleanup_at and r.verification_state in {"POSSIBLE_RETURN", "UNVERIFIED"}]
-    return {"hotspot": _hotspot_dict(db, hotspot), "reports": [_report_dict(r, hotspot) for r in reports],
+    return {"hotspot": _hotspot_dict(db, hotspot), "reports": [_report_dict(r, hotspot, db) for r in reports],
             "tasks": [_task_dict(db, t) for t in tasks], "events": [_event_dict(e, users.get(e.actor_id)) for e in events],
             "interventions": [_intervention_dict(i) for i in interventions], "followups": [_followup_dict(f) for f in followups],
-            "possible_return_reports": [_report_dict(r, hotspot) for r in possible]}
+            "possible_return_reports": [_report_dict(r, hotspot, db) for r in possible]}
 
 
 @app.get("/api/reports")
@@ -547,7 +616,23 @@ def list_reports(hotspot_id: int | None = None, mine: bool = False,
     reports = query.order_by(Report.created_at.desc()).all()
     hotspot_ids = {r.hotspot_id for r in reports}
     hotspot_map = {h.id: h for h in db.query(Hotspot).filter(Hotspot.id.in_(hotspot_ids)).all()} if hotspot_ids else {}
-    return [_report_dict(r, hotspot_map.get(r.hotspot_id)) for r in reports]
+    return [_report_dict(r, hotspot_map.get(r.hotspot_id), db) for r in reports]
+
+
+@app.get("/api/reports/{report_id}/timeline")
+def report_timeline(report_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    report = db.get(Report, report_id)
+    if not report:
+        raise HTTPException(404, "Report not found")
+    if user.role == "resident" and report.reporter_id != user.id:
+        raise HTTPException(403, "You can only view timelines for your own reports")
+    events = db.query(HotspotEvent).filter(
+        or_(HotspotEvent.report_id == report_id, HotspotEvent.hotspot_id == report.hotspot_id)
+    ).filter(HotspotEvent.created_at >= report.created_at).order_by(HotspotEvent.created_at.asc()).all()
+    actor_ids = {e.actor_id for e in events if e.actor_id}
+    actors = {u.id: u for u in db.query(User).filter(User.id.in_(actor_ids)).all()} if actor_ids else {}
+    return [_event_dict(e, actors.get(e.actor_id)) for e in events]
+
 
 
 @app.post("/api/reports")

@@ -518,3 +518,160 @@ def test_consent_handling_and_production_lockout():
             assert "default demo credentials cannot be used" in prod_login.json()["detail"].lower()
         finally:
             os.environ["ENVIRONMENT"] = old_env
+
+
+def test_citizen_public_registration_and_resident_role_enforcement():
+    with TestClient(app) as client:
+        ts = int(datetime.now(timezone.utc).timestamp())
+        username = f"citizen_reg_{ts}"
+
+        # Missing consent rejected
+        no_consent = client.post("/api/auth/register", json={
+            "username": username, "display_name": "Ravi Kumar", "password": "SafePassword123!",
+            "ward": "Ward 02", "consent": False
+        })
+        assert no_consent.status_code == 422
+        assert "consent" in no_consent.json()["detail"].lower()
+
+        # Successful registration forces resident role
+        reg_res = client.post("/api/auth/register", json={
+            "username": username, "display_name": "Ravi Kumar", "password": "SafePassword123!",
+            "ward": "Ward 02", "consent": True
+        })
+        assert reg_res.status_code == 200
+        data = reg_res.json()
+        assert "access_token" in data
+        assert data["user"]["role"] == "resident"
+        assert data["user"]["username"] == username
+
+        # Duplicate username returns 409
+        dup_res = client.post("/api/auth/register", json={
+            "username": username, "display_name": "Ravi Duplicate", "password": "AnotherPassword123!",
+            "ward": "Ward 02", "consent": True
+        })
+        assert dup_res.status_code == 409
+
+        # Registered resident can immediately access authenticated endpoints
+        token_headers = {"Authorization": f"Bearer {data['access_token']}"}
+        me_res = client.get("/api/auth/me", headers=token_headers)
+        assert me_res.status_code == 200
+        assert me_res.json()["role"] == "resident"
+
+
+def test_public_hotspots_endpoint():
+    with TestClient(app) as client:
+        # Unauthenticated request succeeds and returns privacy-safe fields
+        res = client.get("/api/hotspots/public")
+        assert res.status_code == 200
+        hotspots = res.json()
+        assert isinstance(hotspots, list)
+        if hotspots:
+            sample = hotspots[0]
+            assert "id" in sample
+            assert "code" in sample
+            assert "label" in sample
+            assert "ward" in sample
+            assert "latitude" in sample
+            assert "longitude" in sample
+            assert "status" in sample
+            # Ensure internal / sensitive keys are not exposed
+            assert "notes" not in sample
+            assert "reporter_id" not in sample
+
+
+def test_worker_task_lifecycle_and_verification_rejection():
+    with TestClient(app) as client:
+        admin_headers = auth(client, "admin", "admin123")
+        worker_headers = auth(client, "worker", "worker123")
+        worker_user = client.get("/api/auth/me", headers=worker_headers).json()
+
+        # Admin creates task assigned to worker
+        task_res = client.post("/api/tasks", headers=admin_headers, json={
+            "hotspot_id": 1,
+            "assigned_worker_id": worker_user["id"],
+            "due_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "notes": "Clear dumping at corner",
+            "stream": "MIXED_UNKNOWN"
+        })
+        assert task_res.status_code == 200
+        task_id = task_res.json()["id"]
+
+        # Worker starts task
+        start_res = client.post(f"/api/tasks/{task_id}/start", headers=worker_headers)
+        assert start_res.status_code == 200
+        assert start_res.json()["status"] == "IN_PROGRESS"
+
+        # Worker uploads before evidence
+        hotspot_1 = client.get("/api/hotspots", headers=admin_headers).json()[0]
+        h_lat, h_lng = hotspot_1["latitude"], hotspot_1["longitude"]
+        before_res = client.post(f"/api/tasks/{task_id}/evidence", headers=worker_headers, data={
+            "kind": "before", "latitude": h_lat, "longitude": h_lng
+        }, files={"photo": ("before.png", png_bytes(), "image/png")})
+        assert before_res.status_code == 200
+        assert before_res.json()["before_key"] is not None
+
+        # Worker updates stream
+        patch_res = client.patch(f"/api/tasks/{task_id}", headers=worker_headers, json={"stream": "DRY"})
+        assert patch_res.status_code == 200
+        assert patch_res.json()["stream"] == "DRY"
+
+        # Worker uploads after evidence
+        after_res = client.post(f"/api/tasks/{task_id}/evidence", headers=worker_headers, data={
+            "kind": "after", "latitude": h_lat, "longitude": h_lng
+        }, files={"photo": ("after.png", png_bytes(), "image/png")})
+        assert after_res.status_code == 200
+        assert after_res.json()["after_key"] is not None
+
+        # Worker finishes task
+        finish_res = client.post(f"/api/tasks/{task_id}/finish", headers=worker_headers)
+        assert finish_res.status_code == 200
+        assert finish_res.json()["status"] == "AWAITING_VERIFICATION"
+
+        # Worker cannot verify/approve their own task (403 Forbidden)
+        self_verify = client.post(f"/api/tasks/{task_id}/verify", headers=worker_headers, data={
+            "approved": "true", "notes": "I approve my own work"
+        })
+        assert self_verify.status_code == 403
+
+        # Supervisor approves task
+        sup_verify = client.post(f"/api/tasks/{task_id}/verify", headers=admin_headers, data={
+            "approved": "true", "notes": "Well cleaned"
+        })
+        assert sup_verify.status_code == 200
+        assert sup_verify.json()["task"]["status"] == "VERIFIED_RESOLVED"
+
+
+def test_report_timeline_access():
+    with TestClient(app) as client:
+        ts = int(datetime.now(timezone.utc).timestamp())
+        user_u = f"timeline_user_{ts}"
+        other_u = f"other_user_{ts}"
+
+        reg_a = client.post("/api/auth/register", json={
+            "username": user_u, "display_name": "Timeline User", "password": "Password123!", "consent": True
+        }).json()
+        headers_a = {"Authorization": f"Bearer {reg_a['access_token']}"}
+
+        reg_b = client.post("/api/auth/register", json={
+            "username": other_u, "display_name": "Other User", "password": "Password123!", "consent": True
+        }).json()
+        headers_b = {"Authorization": f"Bearer {reg_b['access_token']}"}
+
+        # User A creates a report
+        rep = client.post("/api/reports", headers=headers_a, data={
+            "issue_type": "DUMPING", "description": "Tracking timeline",
+            "ward": "Ward 01", "lat": 21.1458, "lng": 79.0882, "consent": "true"
+        }, files={"photo": ("photo.png", png_bytes(), "image/png")}).json()
+        rep_id = rep["report"]["id"]
+
+        # User A can view timeline
+        tl_res = client.get(f"/api/reports/{rep_id}/timeline", headers=headers_a)
+        assert tl_res.status_code == 200
+        timeline = tl_res.json()
+        assert isinstance(timeline, list)
+        assert len(timeline) >= 1
+        assert any(e["event_type"] == "REPORT_SUBMITTED" for e in timeline)
+
+        # User B cannot view User A's timeline (403)
+        b_res = client.get(f"/api/reports/{rep_id}/timeline", headers=headers_b)
+        assert b_res.status_code == 403
