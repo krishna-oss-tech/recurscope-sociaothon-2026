@@ -240,3 +240,14 @@ html{scroll-behavior:smooth}body{background:var(--canvas)}button,input,select,te
 .op-form-section-head{display:grid;gap:3px;margin-bottom:12px;border-bottom:1px solid #e3ebd9;padding-bottom:8px}
 .op-form-section-head h3{margin:0;font:700 13px 'Space Grotesk',sans-serif;color:#1e432d}
 .op-form-section-head p{margin:0;font:400 11px 'DM Sans',sans-serif;color:#5a735a}
+
+/* Error Banner & Spinners */
+.error-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fdeeee;border:1px solid #f8c8c8;color:#a32a2a;padding:10px 14px;border-radius:8px;font:500 12px 'Space Grotesk',sans-serif;margin-bottom:14px}
+.spin{animation:rsSpin 1s linear infinite}
+@keyframes rsSpin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+
+/* Public Hotspot Card Styles */
+.public-hotspots-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:10px}
+.public-hotspot-card{transition:all .18s;box-shadow:0 1px 3px rgba(0,0,0,.03)}
+.public-hotspot-card:hover{border-color:#8cae87!important;transform:translateY(-1px)}
+.hotspot-card-selected{border-color:#2a573f!important;box-shadow:0 0 0 2px rgba(42,87,63,.15)}
